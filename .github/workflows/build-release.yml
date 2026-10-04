@@ -1,0 +1,44 @@
+name: Build, test and release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build portable application
+        shell: pwsh
+        run: |
+          $version = '1.0.0'
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
+          ./build.ps1 -Version $version
+      - name: Test merging and update validation
+        shell: pwsh
+        run: |
+          python tests/test_merge.py
+          if ($LASTEXITCODE -ne 0) { throw 'Merge tests failed' }
+          ./tests/test_updates.ps1
+      - name: Publish portable package
+        if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes 'Portable Windows application. See README for instructions.'
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
+          }
+          gh release upload $tag dist/review-merge-windows.zip dist/review-merge-windows.zip.sha256 --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
