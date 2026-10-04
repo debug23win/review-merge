@@ -63,8 +63,9 @@ namespace DesktopUpdates {
             if(!File.Exists(Path.Combine(stage,AppInfo.Executable)))throw new InvalidDataException("В пакете отсутствует программа.");
             if(AppInfo.UpdateFiles.Contains("Recognize.ps1")&&!File.Exists(Path.Combine(stage,"Recognize.ps1")))throw new InvalidDataException("В пакете отсутствует модуль OCR.");
         }
-        public static string Download(ReleaseInfo release) {
-            string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DocumentReviewTools",AppInfo.Product,"updates",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+        public static string Download(ReleaseInfo release,string cacheRoot=null) {
+            string cache=cacheRoot??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DocumentReviewTools",AppInfo.Product,"updates");
+            string root=Path.Combine(cache,Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
             string zip=Path.Combine(root,"package.zip"),stage=Path.Combine(root,"package");
             using(var response=Request(release.Url).GetResponse())using(var input=response.GetResponseStream())using(var output=File.Create(zip)){
                 byte[] buffer=new byte[65536];int n;long received=0;while((n=input.Read(buffer,0,buffer.Length))>0){received+=n;if(received>50000000)throw new InvalidDataException("Пакет слишком большой.");output.Write(buffer,0,n);}if(received!=release.Size)throw new InvalidDataException("Пакет скачан не полностью.");
@@ -90,13 +91,13 @@ namespace DesktopUpdates {
                 if(busy()){MessageBox.Show(form,"Дождитесь завершения текущей проверки или свода.","Обновления");return;}
                 if(latest==null||latest.Version<=new Version(Current.ToString(3))){check(true);return;}
                 if(MessageBox.Show(form,"Установить версию "+latest.Version.ToString(3)+" из GitHub Releases? Программа перезапустится. Результаты проверки сохраните перед обновлением.","Обновление",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
-                link.Enabled=false;link.Text="Загрузка обновления…";
+                link.Enabled=false;link.Text="Загрузка обновления…";form.Enabled=false;
                 try{
                     string destination=Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
                     string probe=Path.Combine(destination,".update-write-"+Guid.NewGuid().ToString("N"));using(File.Create(probe)){}File.Delete(probe);
                     string stage=await Task.Run(()=>Download(latest));string helper=Path.Combine(Path.GetDirectoryName(stage),"update-helper.exe");File.Copy(Application.ExecutablePath,helper);
                     Process.Start(new ProcessStartInfo(helper,"--apply-update "+Process.GetCurrentProcess().Id+" \""+destination.TrimEnd('\\')+"\" \""+stage+"\""){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden});form.Close();
-                }catch(Exception ex){MessageBox.Show(form,"Обновление не установлено: "+ex.Message+"\nРаспакуйте программу в папку, где разрешена запись, и повторите попытку.","Обновления",MessageBoxButtons.OK,MessageBoxIcon.Error);link.Text="Установить v"+latest.Version.ToString(3);link.Enabled=true;}
+                }catch(Exception ex){form.Enabled=true;MessageBox.Show(form,"Обновление не установлено: "+ex.Message+"\nРаспакуйте программу в папку, где разрешена запись, и повторите попытку.","Обновления",MessageBoxButtons.OK,MessageBoxIcon.Error);link.Text="Установить v"+latest.Version.ToString(3);link.Enabled=true;}
             };
             form.Shown+=(s,e)=>{if(Environment.GetCommandLineArgs().Length==1)check(false);};return link;
         }
