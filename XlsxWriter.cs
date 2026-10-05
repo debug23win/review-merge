@@ -72,6 +72,7 @@ namespace ReviewMerge {
         }
         void PutSheet(string name,XDocument data) {
             string path=PathFor(name);
+            if(path!=null)book.Root.Element(N+"sheets").Elements().First(e=>PathFor((string)e.Attribute("name"))==path).SetAttributeValue("name",name);
             if(path==null){
                 int n=1;while(entries.ContainsKey("xl/worksheets/sheet"+n+".xml"))n++;
                 path="xl/worksheets/sheet"+n+".xml";string rid="mergeSheet"+n;
@@ -83,17 +84,48 @@ namespace ReviewMerge {
             }
             Store(path,data);
         }
+        void RemoveGeneratedLogs() {
+            foreach(var sheet in book.Root.Element(N+"sheets").Elements().ToList()) {
+                string name=(string)sheet.Attribute("name"),path=PathFor(name);string[] expected=null;
+                if(name=="История проверок")expected=new[]{"Исходный файл","Полный путь"};
+                if(name=="Конфликты свода")expected=new[]{"Документ","Поле","Различия в источниках","Применённое правило"};
+                if(name=="Проблемы данных")expected=new[]{"Исходный файл","Строка","Документ","Проблема"};
+                if(expected==null)continue;
+                var first=Xml(path).Descendants(N+"sheetData").Elements(N+"row").FirstOrDefault();
+                var headers=first==null?new string[0]:first.Elements(N+"c").Take(expected.Length).Select(e=>string.Concat(e.Descendants(N+"t").Select(t=>t.Value))).ToArray();
+                if(!headers.SequenceEqual(expected))continue;
+                int index=book.Root.Element(N+"sheets").Elements().TakeWhile(e=>e!=sheet).Count();
+                foreach(var n in book.Descendants(N+"definedName").Where(e=>e.Attribute("localSheetId")!=null).ToList()) {
+                    int local=(int)n.Attribute("localSheetId");if(local==index)n.Remove();else if(local>index)n.SetAttributeValue("localSheetId",local-1);
+                }
+                string id=(string)sheet.Attribute(R+"id");sheet.Remove();rels.Root.Elements().Where(e=>(string)e.Attribute("Id")==id).Remove();
+                types.Root.Elements().Where(e=>(string)e.Attribute("PartName")=="/"+path).Remove();entries.Remove(path);
+                entries.Remove(Path.GetDirectoryName(path).Replace('\\','/')+"/_rels/"+Path.GetFileName(path)+".rels");
+            }
+        }
+        static void SetCell(XElement row,XElement value) {
+            var old=row.Elements(N+"c").FirstOrDefault(e=>(string)e.Attribute("r")== (string)value.Attribute("r"));
+            if(old!=null)old.ReplaceWith(value);else row.Add(value);
+        }
         string Ref(string name,string col,int start,int last){return "'"+name.Replace("'","''")+"'!$"+col+"$"+start+":$"+col+"$"+last;}
         public void Save(string firstFile,string output,string mainName,DateTime asOf,MergeResult result,Action<int,string> progress,CancellationToken token) {
             using(var s=File.OpenRead(firstFile))using(var z=new ZipArchive(s,ZipArchiveMode.Read))foreach(var e in z.Entries){using(var m=new MemoryStream())using(var es=e.Open()){es.CopyTo(m);entries[e.FullName]=m.ToArray();}}
             book=Xml("xl/workbook.xml");rels=Xml("xl/_rels/workbook.xml.rels");types=Xml("[Content_Types].xml");
             var pr=book.Root.Element(N+"workbookPr");if(pr!=null && ((string)pr.Attribute("date1904")=="1" || (string)pr.Attribute("date1904")=="true"))throw new InvalidDataException("Первый файл использует систему дат 1904. Выберите первым файл с системой дат 1900.");
             SetupStyles();mainPath=PathFor(mainName);var main=Xml(mainPath);string actualName=(string)book.Root.Element(N+"sheets").Elements().First(e=>PathFor((string)e.Attribute("name"))==mainPath).Attribute("name");
-            int first=result.StartRow,last=first+result.Rows.Count-1;var data=main.Root.Element(N+"sheetData");
+            int first=result.StartRow;var data=main.Root.Element(N+"sheetData");
+            var existing=data.Elements(N+"row").ToDictionary(e=>(int)e.Attribute("r"));
+            int next=Math.Max(first-1,existing.Keys.DefaultIfEmpty(first-1).Max())+1;
+            var rowNumbers=result.Rows.Select(r=>r.TargetRow!=null?r.TargetRow.Row:next++).ToList();
+            int last=Math.Max(existing.Keys.DefaultIfEmpty(first).Max(),rowNumbers.DefaultIfEmpty(first).Max());
+            if(last>1048576)throw new InvalidDataException("В сводном документе недостаточно свободных строк Excel для новых документов.");
+            var helperHeader=existing[result.HeaderRow].Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==27);
+            bool ourHelpers=helperHeader!=null&&string.Concat(helperHeader.Descendants(N+"t").Select(t=>t.Value))=="Первая дата из источников";
+            if(!ourHelpers&&data.Elements(N+"row").Elements(N+"c").Any(e=>Column((string)e.Attribute("r"))>=21&&Column((string)e.Attribute("r"))<=27&&(e.Element(N+"v")!=null||e.Element(N+"f")!=null||e.Descendants(N+"t").Any())))
+                throw new InvalidDataException("Столбцы U:AA сводного документа заняты. Они нужны для формул статистики; перенесите ваши данные в другие столбцы перед сборкой.");
             var sourceStyles=new Dictionary<int,int>();
             var sample=data.Elements(N+"row").FirstOrDefault(e=>(int)e.Attribute("r")==first);
             if(sample!=null)foreach(var c in sample.Elements(N+"c")){int col=Column((string)c.Attribute("r"));sourceStyles[col]=(int?)c.Attribute("s")??0;}
-            data.Elements(N+"row").Where(e=>(int)e.Attribute("r")>=first).Remove();
             var firstBoxes=new HashSet<string>();var firstBoxDates=new Dictionary<string,double>();
             var boxKeys=new List<string>();var dates=new List<double?>();var issues=new List<int>();var checkedFlags=new List<int>();
             foreach(var r in result.Rows){
@@ -106,10 +138,18 @@ namespace ReviewMerge {
             }
             var usedBoxDate=new HashSet<string>();
             for(int i=0;i<result.Rows.Count;i++){
-                token.ThrowIfCancellationRequested();int rn=first+i;var row=result.Rows[i];var xmlrow=new XElement(N+"row",new XAttribute("r",rn));
+                token.ThrowIfCancellationRequested();int rn=rowNumbers[i];var row=result.Rows[i];XElement xmlrow;
+                bool keep=existing.TryGetValue(rn,out xmlrow);if(!keep){xmlrow=new XElement(N+"row",new XAttribute("r",rn));existing[rn]=xmlrow;data.Add(xmlrow);}
                 int noteLines=Math.Max(Text(row.Values[18]).Split('\n').Length,Text(row.Values[19]).Split('\n').Length);
                 if(noteLines>1){xmlrow.SetAttributeValue("ht",Math.Min(120,Math.Max(30,noteLines*15)));xmlrow.SetAttributeValue("customHeight",1);}
-                for(int col=1;col<=20;col++){int style=sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;xmlrow.Add(Cell(rn,col,row.Values[col-1],style));}
+                for(int col=keep?9:1;col<=20;col++){
+                    var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);
+                    if(keep&&row.TargetRow!=null&&Text(row.TargetRow.Values[col-1])==Text(row.Values[col-1]))continue;
+                    int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
+                    if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
+                    SetCell(xmlrow,Cell(rn,col,row.Values[col-1],style));
+                }
+                xmlrow.Elements(N+"c").Where(e=>Column((string)e.Attribute("r"))>=21&&Column((string)e.Attribute("r"))<=27).Remove();
                 string k=boxKeys[i];int boxFirst=k!="" && firstBoxes.Add(k)?1:0;
                 double? boxDate=k!="" && dates[i].HasValue && firstBoxDates[k]==dates[i].Value && usedBoxDate.Add(k)?dates[i]:null;
                 string ur="$U$"+first+":$U$"+last,yr="$Y$"+first+":$Y$"+last;
@@ -119,18 +159,20 @@ namespace ReviewMerge {
                 xmlrow.Add(Cell(rn,24,checkedFlags[i],intStyle,"IF(AND(C"+rn+"<>\"\",I"+rn+"<>\"\"),1,0)"));
                 xmlrow.Add(Cell(rn,25,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND(X"+rn+"=1,ISNUMBER(J"+rn+"),J"+rn+">0),IF(ISNUMBER(AA"+rn+"),MIN(INT(J"+rn+"),AA"+rn+"),INT(J"+rn+")),\"\")"));
                 xmlrow.Add(Cell(rn,26,issues[i],intStyle,"IF(OR(COUNTIFS(M"+rn+":R"+rn+",1)>0,COUNTIFS(M"+rn+":R"+rn+",\"?*\")>0,S"+rn+"<>\"\",T"+rn+"<>\"\"),1,0)"));
-                xmlrow.Add(Cell(rn,27,row.FirstReviewDate.HasValue?(object)row.FirstReviewDate.Value:null,dateStyle));data.Add(xmlrow);
+                xmlrow.Add(Cell(rn,27,row.FirstReviewDate.HasValue?(object)row.FirstReviewDate.Value:null,dateStyle));
+                var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
             }
             var header=data.Elements(N+"row").First(e=>(int)e.Attribute("r")==result.HeaderRow);string[] helpers={"Ключ короба (формула)","Первая строка короба","Первая проверка короба","Документ проверен","Дата для статистики","Есть замечания","Первая дата из источников"};
             header.Elements(N+"c").Where(e=>Column((string)e.Attribute("r"))>=21 && Column((string)e.Attribute("r"))<=27).Remove();for(int i=0;i<7;i++)header.Add(Cell(result.HeaderRow,21+i,helpers[i],headStyle));
-            var dimension=main.Root.Element(N+"dimension");if(dimension==null){dimension=new XElement(N+"dimension");var sheetPr=main.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else main.Root.AddFirst(dimension);}dimension.SetAttributeValue("ref","A1:AA"+last);
-            var cols=main.Root.Element(N+"cols");if(cols==null){cols=new XElement(N+"cols");data.AddBeforeSelf(cols);}foreach(var col in cols.Elements().Where(e=>(int)e.Attribute("max")>=21).ToList()){if((int)col.Attribute("min")<21)col.SetAttributeValue("max",20);else col.Remove();}cols.Add(Col(21,27,24,true));
+            int maxCol=Math.Max(27,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(27).Max());
+            var dimension=main.Root.Element(N+"dimension");if(dimension==null){dimension=new XElement(N+"dimension");var sheetPr=main.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else main.Root.AddFirst(dimension);}dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(maxCol)+last);
+            var cols=main.Root.Element(N+"cols");if(cols==null){cols=new XElement(N+"cols");data.AddBeforeSelf(cols);}foreach(var col in cols.Elements().Where(e=>(int)e.Attribute("max")>=21&&(int)e.Attribute("min")<=27).ToList()){int min=(int)col.Attribute("min"),max=(int)col.Attribute("max");if(max>27){var rest=new XElement(col);rest.SetAttributeValue("min",28);cols.Add(rest);}if(min<21)col.SetAttributeValue("max",20);else col.Remove();}cols.Add(Col(21,27,24,true));var sortedCols=cols.Elements().OrderBy(e=>(int)e.Attribute("min")).ToList();sortedCols.Remove();cols.Add(sortedCols);
             var filter=main.Root.Element(N+"autoFilter");if(filter==null){filter=new XElement(N+"autoFilter");data.AddAfterSelf(filter);}filter.RemoveNodes();filter.SetAttributeValue("ref","A"+result.HeaderRow+":T"+last);
             Store(mainPath,main);progress(65,"Основной лист объединён. Создание формул статистики");
-            WriteSummary(actualName,result,asOf,first,last,boxKeys,dates,issues,checkedFlags,firstBoxDates);WriteLogs(result);
+            RemoveGeneratedLogs();WriteSummary(actualName,result,asOf,first,last,boxKeys,dates,issues,checkedFlags,firstBoxDates);
             var calc=book.Root.Element(N+"calcPr");if(calc==null){calc=new XElement(N+"calcPr");book.Root.Add(calc);}calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",1);calc.SetAttributeValue("calcId",0);
             rels.Root.Elements().Where(e=>((string)e.Attribute("Type")??"").EndsWith("/calcChain")).Remove();types.Root.Elements().Where(e=>((string)e.Attribute("PartName")??"").EndsWith("/calcChain.xml")).Remove();entries.Remove("xl/calcChain.xml");
-            int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>(string)x.e.Attribute("name")=="СВОД").i;
+            int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>(string)x.e.Attribute("name")=="Свод").i;
             var view=book.Root.Element(N+"bookViews");if(view!=null && view.Elements().Any())view.Elements().First().SetAttributeValue("activeTab",svIndex);
             Store("xl/workbook.xml",book);Store("xl/_rels/workbook.xml.rels",rels);Store("[Content_Types].xml",types);Store("xl/styles.xml",styles);
             progress(90,"Сохранение XLSX с формулами");using(var s=new FileStream(output,FileMode.CreateNew))using(var z=new ZipArchive(s,ZipArchiveMode.Create)){foreach(var item in entries){token.ThrowIfCancellationRequested();var e=z.CreateEntry(item.Key,CompressionLevel.Optimal);using(var stream=e.Open())stream.Write(item.Value,0,item.Value.Length);}}
@@ -174,7 +216,7 @@ namespace ReviewMerge {
                 int count=0,issue=0,missing=0;for(int i=0;i<result.Rows.Count;i++)if(string.Equals(Text(result.Rows[i].Values[8]),who,StringComparison.OrdinalIgnoreCase)){if(!dates[i].HasValue)missing++;else if(dates[i].Value<=asOf.ToOADate()){count++;issue+=issues[i];}}
                 g.Set(row,2,count,intStyle,"COUNTIFS("+ir+","+crit+","+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+ec+"$5)");g.Set(row,3,issue,intStyle,"COUNTIFS("+ir+","+crit+","+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+ec+"$5,"+zr+",1)");g.Set(row,4,missing,intStyle,"SUMPRODUCT(("+ir+"=$A"+row+")*("+xr+"=1)*("+yr+"=\"\"))");
             }
-            PutSheet("СВОД",Sheet(g,new []{Col(1,1,64),Col(2,Math.Max(5,end),19)},true,Math.Max(5,end)));
+            PutSheet("Свод",Sheet(g,new []{Col(1,1,64),Col(2,Math.Max(5,end),19)},true,Math.Max(5,end)));
         }
         void WriteLogs(MergeResult result) {
             var h=new Grid();string[] names={"Исходный файл","Полный путь","Строка источника","№ п/п","Раздел","Документ (файл)","Формат","Вес","Дата выгрузки","Время выгрузки","CRC32","Проверил","Дата проверки","Вид","Короб","Название","Шифр","Страницы","Титул: подписи/печати","CRC32: замечание","ИУЛ: подписи","Ошибки в описи","Примечание"};for(int j=0;j<names.Length;j++)h.Set(1,j+1,names[j],headStyle);h.Heights[1]=32;

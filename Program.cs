@@ -85,13 +85,13 @@ namespace ReviewMerge {
             sheetName.Text="Все загруженные файлы";sheetName.Dock=DockStyle.Fill;parameters.Controls.Add(sheetName,1,0);
             parameters.Controls.Add(new Label {Text="Дата свода:",AutoSize=true,Anchor=AnchorStyles.Left},2,0);
             asOf.Format=DateTimePickerFormat.Custom;asOf.CustomFormat="dd.MM.yyyy";asOf.Dock=DockStyle.Fill;parameters.Controls.Add(asOf,3,0);content.Controls.Add(parameters,0,2);
-            rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний.\nПроверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.\nВсе исходные записи и различия сохраняются в отдельных листах результата.";content.Controls.Add(rule,0,3);
+            rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний.\nПроверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.\nДанные дописываются в выбранный сводный документ. Статистика — на вкладке «Свод».";content.Controls.Add(rule,0,3);
             var save=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3};save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));save.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
-            save.Controls.Add(new Label {Text="Сохранить свод:",AutoSize=true,Anchor=AnchorStyles.Left},0,0);output.Dock=DockStyle.Fill;output.Text=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Свод_"+DateTime.Today.ToString("yyyy-MM-dd")+".xlsx");save.Controls.Add(output,1,0);
+            save.Controls.Add(new Label {Text="Сводный документ:",AutoSize=true,Anchor=AnchorStyles.Left},0,0);output.Dock=DockStyle.Fill;save.Controls.Add(output,1,0);
             save.Controls.Add(EditButton("Обзор…",105,(s,e)=>ChooseOutput()),2,0);content.Controls.Add(save,0,4);
             progress.Dock=DockStyle.Fill;progress.Maximum=100;progress.Margin=new Padding(0,3,0,6);content.Controls.Add(progress,0,5);
             log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.FromArgb(248,250,252);log.BorderStyle=BorderStyle.FixedSingle;log.Font=new Font("Segoe UI",9);
-            log.Text="Добавьте сохранённые файлы проверяющих. Первый файл задаёт структуру и оформление результата.\nФормулы пересчитываются при открытии Excel. Исходные файлы не изменяются.";content.Controls.Add(log,0,6);
+            log.Text="Добавьте файлы проверяющих и выберите существующий сводный документ.\nЕго строки и оформление сохраняются; новые документы добавляются в конец. Перед записью создаётся резервная копия. Закройте документ в Excel на время сборки.";content.Controls.Add(log,0,6);
             totals.Dock=DockStyle.Fill;totals.Text="Файлы не выбраны";totals.ForeColor=Color.FromArgb(28,46,65);content.Controls.Add(totals,0,7);
             var conflictPage=new TabPage("Конфликты") {Padding=new Padding(12),BackColor=Color.White};tabs.TabPages.Add(conflictPage);
             conflicts.Dock=DockStyle.Fill;conflicts.ReadOnly=true;conflicts.AllowUserToAddRows=false;conflicts.AllowUserToDeleteRows=false;conflicts.AutoGenerateColumns=false;conflicts.BackgroundColor=Color.White;conflicts.RowHeadersVisible=false;conflicts.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.DisplayedCells;
@@ -128,7 +128,7 @@ namespace ReviewMerge {
         }
         void RemoveSelected() {foreach(int index in files.SelectedIndices.Cast<int>().OrderByDescending(i=>i).ToArray())paths.RemoveAt(index);RefreshList();}
         void MoveSelected(int delta) {if(files.SelectedIndices.Count!=1)return;int a=files.SelectedIndices[0],b=a+delta;if(b<0 || b>=paths.Count)return;string p=paths[a];paths[a]=paths[b];paths[b]=p;RefreshList();files.Items[b].Selected=true;files.Items[b].Focused=true;}
-        void ChooseOutput() {using(var dialog=new SaveFileDialog {Title="Сохранить общий свод",Filter="Книга Excel (*.xlsx)|*.xlsx",FileName=output.Text,OverwritePrompt=true})if(dialog.ShowDialog(this)==DialogResult.OK)output.Text=dialog.FileName;}
+        void ChooseOutput() {using(var dialog=new OpenFileDialog {Title="Выберите сводный документ для дополнения",Filter="Книга Excel (*.xlsx)|*.xlsx",FileName=output.Text,CheckFileExists=true})if(dialog.ShowDialog(this)==DialogResult.OK)output.Text=dialog.FileName;}
         void Append(string message) {log.AppendText("\n"+DateTime.Now.ToString("HH:mm:ss")+"  "+message);log.SelectionStart=log.TextLength;log.ScrollToCaret();}
         void Ui(Action action) {if(!IsDisposed && IsHandleCreated)BeginInvoke(action);}
         void Busy(bool value) {
@@ -140,15 +140,14 @@ namespace ReviewMerge {
             if(string.IsNullOrWhiteSpace(output.Text) || string.IsNullOrWhiteSpace(sheetName.Text)) {MessageBox.Show(this,"Укажите основной лист и итоговый файл.",Text);return;}
             string destination;
             try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
-            if(paths.Any(p=>string.Equals(p,destination,StringComparison.OrdinalIgnoreCase))){MessageBox.Show(this,"Выберите отдельный итоговый файл: исходные файлы перезаписывать нельзя.",Text);return;}
-            if(File.Exists(destination) && MessageBox.Show(this,"Заменить существующий итоговый файл? Предыдущая версия будет сохранена рядом с расширением .backup.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+            if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
             var selected=paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append("Начата сборка "+selected.Count+" файлов.");
             var worker=new Thread(()=> {
                 try {
                     var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token);
                     Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text="Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
-                        Append("Сохранено: "+result.Output);if(result.Problems.Count>0)Append("Откройте лист «Проблемы данных»: строки без документа и некорректные реквизиты сохранены для разбора.");Busy(false);cancellation.Dispose();cancellation=null;});
+                        Append("Дополнен сводный документ: "+result.Output);foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
                 } catch(OperationCanceledException) {Ui(()=>{Append("Сборка отменена. Итоговый файл не заменён.");Busy(false);cancellation.Dispose();cancellation=null;});}
                 catch(Exception ex) {Ui(()=>{Append("Ошибка: "+ex.Message);Busy(false);cancellation.Dispose();cancellation=null;MessageBox.Show(this,ex.Message,"Не удалось собрать свод",MessageBoxButtons.OK,MessageBoxIcon.Error);});}
             });worker.SetApartmentState(ApartmentState.STA);worker.IsBackground=true;worker.Start();

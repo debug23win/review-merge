@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 
 namespace ReviewMerge {
     public sealed class Conflict {
@@ -22,6 +23,7 @@ namespace ReviewMerge {
     }
     public sealed class MergedRow {
         public object[] Values;
+        public SourceRow TargetRow;
         public double? FirstReviewDate;
         public readonly List<SourceRow> Reviews = new List<SourceRow>();
     }
@@ -93,7 +95,7 @@ namespace ReviewMerge {
                 if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; }
                 foreach (var orphan in source.Orphans) {
                     result.History.Add(orphan);
-                    AddProblem(result, orphan, "Есть данные проверки, но нет названия документа. Запись сохранена в истории; в статистику документов не включена.");
+                    AddProblem(result, orphan, "Есть данные проверки, но нет названия документа. В сводном документе такая строка сохраняется на месте; строка из другого источника не переносится без идентификации документа. В статистику документов не включена.");
                 }
                 var seenInFile = new HashSet<string>();
                 foreach (var row in source.Rows) {
@@ -103,7 +105,7 @@ namespace ReviewMerge {
                     if (Txt(row.Values[7]) == "" && HasReview(row)) AddProblem(result, row, "Не указана контрольная сумма: идентификация выполнена по остальным реквизитам.");
                     MergedRow merged;
                     if (!byKey.TryGetValue(key, out merged)) {
-                        merged = new MergedRow { Values = (object[])row.Values.Clone() };
+                        merged = new MergedRow { Values = (object[])row.Values.Clone(), TargetRow = fi == 0 ? row : null };
                         byKey.Add(key, merged); result.Rows.Add(merged);
                     }
                     double? actualDate = Txt(row.Values[8]) != "" ? XlsxReader.DateSerial(row.Values[9]) : null;
@@ -158,7 +160,7 @@ namespace ReviewMerge {
                     if (distinct.Count < 2) continue;
                     string decision = col == 8 || col == 9 ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                         col == 10 || col == 11 ? "Первое непустое значение в порядке файлов; требуется сверка реквизитов." :
-                        col < 18 ? "Все отметки 1 сохранены; остальные значения доступны в истории." : "Все разные тексты объединены с указанием проверяющего и даты.";
+                        col < 18 ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные тексты объединены с указанием проверяющего и даты.";
                     result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = ExcelColumn(col+1) + " — " + Fields[col-8],
                         Details = string.Join("\n",active.Select(r => SourceDescription(r,col))), Decision = decision });
                 }
@@ -180,21 +182,32 @@ namespace ReviewMerge {
         public static string ExcelColumn(int column) {
             string result=""; while(column>0) { column--; result=(char)('A'+column%26)+result; column/=26; } return result;
         }
+        static string Digest(string path) {
+            using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))using(var hash=SHA256.Create())
+                return Convert.ToBase64String(hash.ComputeHash(stream));
+        }
         public static MergeResult Run(IList<string> files,string output,string mainName,DateTime asOf,Action<int,string> progress,CancellationToken token) {
             output=Path.GetFullPath(output);
-            if(files.Any(f=>string.Equals(Path.GetFullPath(f),output,StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Итоговый файл не может совпадать с исходным.");
             if(Path.GetExtension(output).ToLowerInvariant()!=".xlsx") throw new InvalidOperationException("Результат необходимо сохранить с расширением .xlsx.");
-            var result=Collect(files,mainName,asOf,progress,token);
+            bool exists=File.Exists(output);string before=null;
+            if(exists) {
+                try {using(var check=new FileStream(output,FileMode.Open,FileAccess.ReadWrite,FileShare.None)){} before=Digest(output);}
+                catch(IOException) {throw new IOException("Закройте сводный документ в Excel и повторите сборку: файл занят другой программой.");}
+            }
+            var sources=new List<string>();if(exists)sources.Add(output);
+            foreach(string f in files.Select(Path.GetFullPath))if(!sources.Any(s=>string.Equals(s,f,StringComparison.OrdinalIgnoreCase)))sources.Add(f);
+            var result=Collect(sources,mainName,asOf,progress,token);result.Files=files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
             string parent=Path.GetDirectoryName(output);Directory.CreateDirectory(parent);
             string temp=Path.Combine(parent,"~merge-"+Guid.NewGuid().ToString("N")+".xlsx");
             try {
                 Check(token);progress(45,"Создание XLSX с формулами");
-                new XlsxWriter().Save(files[0],temp,mainName,asOf,result,progress,token);
+                new XlsxWriter().Save(sources[0],temp,mainName,asOf,result,progress,token);
                 Check(token);
-                if(File.Exists(output)) {
+                if(exists) {
+                    if(!File.Exists(output)||Digest(output)!=before)throw new IOException("Сводный документ изменился во время сборки. Запись отменена; повторите сборку с актуальным файлом.");
                     string backup=output+".backup-"+DateTime.Now.ToString("yyyyMMdd-HHmmssfff",Inv);
                     File.Replace(temp,output,backup);progress(97,"Предыдущий результат сохранён: "+Path.GetFileName(backup));
-                } else File.Move(temp,output);
+                } else {if(File.Exists(output))throw new IOException("Файл результата появился во время сборки. Повторите сборку.");File.Move(temp,output);}
                 result.Output=output;progress(100,"Готово: "+result.Documents+" документов, "+result.Conflicts.Count+" конфликтов, "+result.Problems.Count+" проблем данных");return result;
             } finally { if(File.Exists(temp)) { try {File.Delete(temp);}catch{} } }
         }
