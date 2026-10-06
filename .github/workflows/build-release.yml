@@ -28,19 +28,27 @@ jobs:
       - name: Test merging and update validation
         shell: pwsh
         run: |
+          python -m pip install openpyxl==3.1.5
+          if ($LASTEXITCODE -ne 0) { throw 'Test dependency installation failed' }
           python tests/test_merge.py
           if ($LASTEXITCODE -ne 0) { throw 'Merge tests failed' }
           ./tests/test_updates.ps1
       - name: Publish portable package
-        if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:GITHUB_REF_NAME
+          if ($env:GITHUB_REF == 'refs/heads/main') {
+            $appVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $PWD 'Свод_проверки.exe')).FileVersion
+            $tag = 'v' + ([version]$appVersion).ToString(3)
+          }
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes 'Portable Windows application. See README for instructions.'
+          $exists = $LASTEXITCODE -eq 0
+          if ($exists -and $env:GITHUB_REF == 'refs/heads/main') { exit 0 }
+          if (!$exists) {
+            gh release create $tag --target $env:GITHUB_SHA --repo $env:GITHUB_REPOSITORY --title $tag --notes-file RELEASE_NOTES.md
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
           }
           gh release upload $tag dist/review-merge-windows.zip dist/review-merge-windows.zip.sha256 --clobber --repo $env:GITHUB_REPOSITORY
