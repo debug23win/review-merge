@@ -22,8 +22,9 @@ def cells(archive, member):
         result[cell.get('r')] = (value, cell.findtext('s:f', None, NS))
     return result
 
-def run(output, sources):
-    subprocess.run([str(ROOT/'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', 'Все загруженные файлы', *map(str, sources)], check=True, timeout=90)
+def run(output, sources, current_date=False):
+    options=['--current-date-for-new'] if current_date else []
+    subprocess.run([str(ROOT/'Свод_проверки.exe'), '--batch', str(output), *options, '2026-10-04', 'Все загруженные файлы', *map(str, sources)], check=True, timeout=90)
     return json.loads(Path(str(output)+'.run.json').read_text(encoding='utf-8-sig'))
 
 run_root = ROOT/'tests/.runs'
@@ -185,11 +186,42 @@ def test_complete_boxes_and_reviewers():
     assert after.cell(start,6).value==datetime(2026,10,2) and after.cell(start+1,6).value==datetime(2026,10,3)
     assert sum(c.value=='ReviewMerge.FirstDates.v3' for c in load_workbook(output)['Справка по томам'][1])==1
 
+def test_current_date_for_new_reviews():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'incoming.xlsx'
+    w=load_workbook(ROOT/'tests/fixtures/Анна.xlsx');m=w['Все загруженные файлы'];m.delete_rows(7,m.max_row)
+    documents=[('Том А','Анна',datetime(2026,10,2)),('Том Б','Борис',datetime(2026,10,3)),('Том В','Борис',None),('Том Г',None,None),('Том Д','Анна','неверная дата'),('Том А Фрагмент 2','Анна',datetime(2026,10,2))]
+    for r,(file,who,date) in enumerate(documents,7):
+        for c,v in {1:r-6,3:file,4:'pdf',8:f'{r:08X}',9:who,10:date,11:'ПД',12:1,20:'Исходный текст'}.items():m.cell(r,c,v)
+    w.save(source)
+    target=temp/'current.xlsx';shutil.copyfile(source,target)
+    w=load_workbook(target);m=w['Все загруженные файлы']
+    for r in range(8,13):m.cell(r,9).value=None;m.cell(r,10).value=None
+    w.save(target)
+    today=datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
+    report=run(target,[source],True);assert report['DatesAssignedToday']==4,report
+    w=load_workbook(target,data_only=True);m=w['Все загруженные файлы']
+    assert m['J7'].value==datetime(2026,10,2)
+    for r in [8,9,11,12]:assert m.cell(r,10).value==today,(r,m.cell(r,10).value)
+    assert m['J10'].value is None and m['I10'].value is None
+    assert all(m.cell(r,20).value=='Исходный текст' for r in range(7,13))
+    assert all(m.cell(r,10).number_format=='dd.mm.yyyy' for r in range(7,13))
+    ref=w['Справка по томам'];h=next(c.column for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3')
+    assert ref.cell(8,h+6).value==today,'Source historical date leaked into first-review statistics'
+    before=[m.cell(r,10).value for r in range(7,13)];repeat=run(target,[source],True)
+    after=load_workbook(target,data_only=True)['Все загруженные файлы'];assert repeat['DatesAssignedToday']==0
+    assert before==[after.cell(r,10).value for r in range(7,13)],'Repeated import changed saved dates'
+    fresh=temp/'fresh.xlsx';run(fresh,[source],True);n=load_workbook(fresh,data_only=True)['Все загруженные файлы']
+    assert all(n.cell(r,10).value==today for r in [7,8,9,11,12])
+    original=temp/'original-dates.xlsx';run(original,[source]);n=load_workbook(original,data_only=True)['Все загруженные файлы']
+    assert n['J7'].value==datetime(2026,10,2) and n['J8'].value==datetime(2026,10,3)
+    assert n['J9'].value is None and n['J11'].value=='неверная дата'
+
 test_merge()
 test_existing_target()
 test_user_columns()
 test_template_and_fragments()
 test_legacy_annotations()
 test_complete_boxes_and_reviewers()
+test_current_date_for_new_reviews()
 print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas and repeated merge')
 

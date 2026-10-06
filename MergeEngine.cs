@@ -28,7 +28,7 @@ namespace ReviewMerge {
         public readonly List<SourceRow> Reviews = new List<SourceRow>();
     }
     public sealed class MergeResult {
-        public int Files, Documents, Reviewed, WithIssues, Boxes;
+        public int Files, Documents, Reviewed, WithIssues, Boxes, DatesAssignedToday;
         public string Output;
         public readonly List<Conflict> Conflicts = new List<Conflict>();
         public readonly List<Problem> Problems = new List<Problem>();
@@ -84,7 +84,7 @@ namespace ReviewMerge {
             // Only source text belongs in a remark. Older generated attribution is removed above.
             return string.Join("\n\n", notes);
         }
-        public static MergeResult Collect(IList<string> files, string sheetName, DateTime asOf, Action<int,string> progress, CancellationToken token) {
+        public static MergeResult Collect(IList<string> files, string sheetName, DateTime asOf, Action<int,string> progress, CancellationToken token, bool currentDateForNewReviews=false, bool existingTarget=false, DateTime? importDate=null) {
             if (files.Count == 0) throw new InvalidOperationException("Добавьте хотя бы один файл .xlsx.");
             var result = new MergeResult { Files = files.Count };
             var byKey = new Dictionary<string, MergedRow>(StringComparer.Ordinal);
@@ -113,9 +113,10 @@ namespace ReviewMerge {
                     if(firstDate.HasValue && (!merged.FirstReviewDate.HasValue || firstDate.Value < merged.FirstReviewDate.Value)) merged.FirstReviewDate=firstDate;
                     if (!HasReview(row)) continue;
                     result.History.Add(row); merged.Reviews.Add(row);
-                    if (Txt(row.Values[9]) != "" && !XlsxReader.DateSerial(row.Values[9]).HasValue)
-                        AddProblem(result, row, "Дата проверки не распознана; запись не включена в статистику по дням.");
-                    if (Txt(row.Values[8]) != "" && Txt(row.Values[9]) == "")
+                    bool suppliedDate=currentDateForNewReviews&&Txt(row.Values[8])!=""&&!(existingTarget&&merged.TargetRow!=null&&Txt(merged.TargetRow.Values[8])!=""&&XlsxReader.DateSerial(merged.TargetRow.Values[9]).HasValue);
+                    if (!suppliedDate&&Txt(row.Values[9]) != "" && !XlsxReader.DateSerial(row.Values[9]).HasValue)
+                        AddProblem(result, row, "Дата проверки в источнике не распознана.");
+                    if (!suppliedDate&&Txt(row.Values[8]) != "" && Txt(row.Values[9]) == "")
                         AddProblem(result, row, "Указан проверяющий, но отсутствует дата проверки.");
                     for (int col = 12; col < 18; col++) {
                         object f = Flag(row.Values[col]);
@@ -161,8 +162,14 @@ namespace ReviewMerge {
                     string decision = col == 8 || col == 9 ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                         col == 10 || col == 11 ? "Первое непустое значение в порядке файлов; требуется сверка реквизитов." :
                         col < 18 ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные исходные тексты объединены без добавления фамилий и дат.";
+                    if(col==9&&currentDateForNewReviews)decision="Дата уже внесённой проверки сохраняется; новой проверке назначается текущая дата загрузки.";
                     result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = ExcelColumn(col+1) + " — " + Fields[col-8],
                         Details = string.Join("\n",active.Select(r => SourceDescription(r,col))), Decision = decision });
+                }
+                if(currentDateForNewReviews&&Txt(merged.Values[8])!=""){
+                    double? saved=existingTarget&&merged.TargetRow!=null&&Txt(merged.TargetRow.Values[8])!=""?XlsxReader.DateSerial(merged.TargetRow.Values[9]):null;
+                    if(saved.HasValue){merged.Values[9]=saved.Value;merged.FirstReviewDate=merged.TargetRow.PriorFirstDate.HasValue?Math.Min(saved.Value,merged.TargetRow.PriorFirstDate.Value):saved.Value;}
+                    else {double today=(importDate??DateTime.Today).Date.ToOADate();merged.Values[9]=today;merged.FirstReviewDate=today;result.DatesAssignedToday++;}
                 }
             }
             result.Documents = result.Rows.Count;
@@ -186,7 +193,7 @@ namespace ReviewMerge {
             using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))using(var hash=SHA256.Create())
                 return Convert.ToBase64String(hash.ComputeHash(stream));
         }
-        public static MergeResult Run(IList<string> files,string output,string mainName,DateTime asOf,Action<int,string> progress,CancellationToken token) {
+        public static MergeResult Run(IList<string> files,string output,string mainName,DateTime asOf,Action<int,string> progress,CancellationToken token,bool currentDateForNewReviews=false) {
             output=Path.GetFullPath(output);
             if(Path.GetExtension(output).ToLowerInvariant()!=".xlsx") throw new InvalidOperationException("Результат необходимо сохранить с расширением .xlsx.");
             bool exists=File.Exists(output);string before=null;
@@ -196,7 +203,8 @@ namespace ReviewMerge {
             }
             var sources=new List<string>();if(exists)sources.Add(output);
             foreach(string f in files.Select(Path.GetFullPath))if(!sources.Any(s=>string.Equals(s,f,StringComparison.OrdinalIgnoreCase)))sources.Add(f);
-            var result=Collect(sources,mainName,asOf,progress,token);result.Files=files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            var result=Collect(sources,mainName,asOf,progress,token,currentDateForNewReviews,exists,DateTime.Today);result.Files=files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            if(currentDateForNewReviews)progress(42,"Текущая дата назначена новым проверенным записям: "+result.DatesAssignedToday+". Даты уже внесённых проверок сохранены.");
             string parent=Path.GetDirectoryName(output);Directory.CreateDirectory(parent);
             string temp=Path.Combine(parent,"~merge-"+Guid.NewGuid().ToString("N")+".xlsx");
             try {

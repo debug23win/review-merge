@@ -16,12 +16,13 @@ namespace ReviewMerge {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
+                bool currentDateForNewReviews=args.Contains("--current-date-for-new");if(args.Length>0&&args[0]=="--batch")args=args.Where(a=>a!="--current-date-for-new").ToArray();
                 if (args.Length > 0 && args[0] == "--batch") {
                     if (args.Length < 5) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...]");
                     DateTime date = DateTime.ParseExact(args[2], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
                     var logs = new List<string>();
-                    var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None);
-                    var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count, result.Output, Log=logs };
+                    var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None,currentDateForNewReviews);
+                    var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.DatesAssignedToday, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count, result.Output, Log=logs };
                     File.WriteAllText(args[1]+".run.json", new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
                     return 0;
                 }
@@ -46,6 +47,7 @@ namespace ReviewMerge {
         readonly ListView files = new ListView();
         readonly TextBox output = new TextBox(), sheetName = new TextBox();
         readonly DateTimePicker asOf = new DateTimePicker();
+        readonly CheckBox currentDate = new CheckBox();
         readonly RichTextBox log = new RichTextBox();
         readonly ProgressBar progress = new ProgressBar();
         readonly Label totals = new Label(), rule = new Label();
@@ -58,7 +60,7 @@ namespace ReviewMerge {
         string lastOutput;
         public MainForm() {
             Text="Свод проверки документации"; Font=new Font("Segoe UI",10); BackColor=Color.FromArgb(246,248,250);
-            ClientSize=new Size(1060,755);MinimumSize=new Size(980,750);StartPosition=FormStartPosition.CenterScreen;
+            ClientSize=new Size(1060,790);MinimumSize=new Size(980,785);StartPosition=FormStartPosition.CenterScreen;
             AutoScaleMode=AutoScaleMode.Dpi;AllowDrop=true;
             var layout=new TableLayoutPanel { Dock=DockStyle.Fill,Padding=new Padding(22),ColumnCount=1,RowCount=4 };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,43));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,50));
@@ -67,9 +69,9 @@ namespace ReviewMerge {
             layout.Controls.Add(new Label {Text="Объединение отметок и замечаний. Статистика рассчитывается формулами из основного листа.",AutoSize=true,ForeColor=Color.FromArgb(73,91,108)},0,1);
             tabs.Dock=DockStyle.Fill;layout.Controls.Add(tabs,0,2);
             var page=new TabPage("Сборка свода") {Padding=new Padding(14),BackColor=Color.White};tabs.TabPages.Add(page);
-            var content=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=8};
+            var content=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=9};
             content.RowStyles.Add(new RowStyle(SizeType.Absolute,38));content.RowStyles.Add(new RowStyle(SizeType.Percent,48));
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute,40));content.RowStyles.Add(new RowStyle(SizeType.Absolute,66));
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute,40));content.RowStyles.Add(new RowStyle(SizeType.Absolute,35));content.RowStyles.Add(new RowStyle(SizeType.Absolute,66));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute,44));content.RowStyles.Add(new RowStyle(SizeType.Absolute,28));
             content.RowStyles.Add(new RowStyle(SizeType.Percent,52));content.RowStyles.Add(new RowStyle(SizeType.Absolute,31));page.Controls.Add(content);
             var buttons=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
@@ -85,14 +87,15 @@ namespace ReviewMerge {
             sheetName.Text="Все загруженные файлы";sheetName.Dock=DockStyle.Fill;parameters.Controls.Add(sheetName,1,0);
             parameters.Controls.Add(new Label {Text="Дата свода:",AutoSize=true,Anchor=AnchorStyles.Left},2,0);
             asOf.Format=DateTimePickerFormat.Custom;asOf.CustomFormat="dd.MM.yyyy";asOf.Dock=DockStyle.Fill;parameters.Controls.Add(asOf,3,0);content.Controls.Add(parameters,0,2);
-            rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний.\nПроверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.\nДанные дописываются в выбранный сводный документ. Статистика — на вкладке «Свод».";content.Controls.Add(rule,0,3);
+            currentDate.Text="Ставить текущую дату новым проверенным томам";currentDate.AutoSize=true;currentDate.Anchor=AnchorStyles.Left;currentDate.Checked=UserSettings.LoadCurrentDate();currentDate.CheckedChanged+=(s,e)=>{try{UserSettings.SaveCurrentDate(currentDate.Checked);}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}UpdateRule();};content.Controls.Add(currentDate,0,3);
+            rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);UpdateRule();content.Controls.Add(rule,0,4);
             var save=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3};save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));save.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
             save.Controls.Add(new Label {Text="Сводный документ:",AutoSize=true,Anchor=AnchorStyles.Left},0,0);output.Dock=DockStyle.Fill;save.Controls.Add(output,1,0);
-            save.Controls.Add(EditButton("Обзор…",105,(s,e)=>ChooseOutput()),2,0);content.Controls.Add(save,0,4);
-            progress.Dock=DockStyle.Fill;progress.Maximum=100;progress.Margin=new Padding(0,3,0,6);content.Controls.Add(progress,0,5);
+            save.Controls.Add(EditButton("Обзор…",105,(s,e)=>ChooseOutput()),2,0);content.Controls.Add(save,0,5);
+            progress.Dock=DockStyle.Fill;progress.Maximum=100;progress.Margin=new Padding(0,3,0,6);content.Controls.Add(progress,0,6);
             log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.FromArgb(248,250,252);log.BorderStyle=BorderStyle.FixedSingle;log.Font=new Font("Segoe UI",9);
-            log.Text="Добавьте файлы проверяющих и выберите существующий сводный документ.\nЕго строки и оформление сохраняются; новые документы добавляются в конец. Перед записью создаётся резервная копия. Закройте документ в Excel на время сборки.";content.Controls.Add(log,0,6);
-            totals.Dock=DockStyle.Fill;totals.Text="Файлы не выбраны";totals.ForeColor=Color.FromArgb(28,46,65);content.Controls.Add(totals,0,7);
+            log.Text="Добавьте файлы проверяющих и выберите существующий сводный документ.\nЕго строки и оформление сохраняются; новые документы добавляются в конец. Перед записью создаётся резервная копия. Закройте документ в Excel на время сборки.";content.Controls.Add(log,0,7);
+            totals.Dock=DockStyle.Fill;totals.Text="Файлы не выбраны";totals.ForeColor=Color.FromArgb(28,46,65);content.Controls.Add(totals,0,8);
             var conflictPage=new TabPage("Конфликты") {Padding=new Padding(12),BackColor=Color.White};tabs.TabPages.Add(conflictPage);
             conflicts.Dock=DockStyle.Fill;conflicts.ReadOnly=true;conflicts.AllowUserToAddRows=false;conflicts.AllowUserToDeleteRows=false;conflicts.AutoGenerateColumns=false;conflicts.BackgroundColor=Color.White;conflicts.RowHeadersVisible=false;conflicts.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.DisplayedCells;
             conflicts.DefaultCellStyle.WrapMode=DataGridViewTriState.True;conflicts.DefaultCellStyle.Font=new Font("Segoe UI",9);conflicts.ColumnHeadersHeightSizeMode=DataGridViewColumnHeadersHeightSizeMode.AutoSize;
@@ -133,7 +136,7 @@ namespace ReviewMerge {
         void Ui(Action action) {if(!IsDisposed && IsHandleCreated)BeginInvoke(action);}
         void Busy(bool value) {
             running=value;build.Enabled=!value;cancel.Enabled=value;open.Enabled=!value && lastOutput!=null;
-            foreach(var b in editingButtons)b.Enabled=!value;sheetName.Enabled=!value;output.Enabled=!value;asOf.Enabled=!value;files.Enabled=!value;
+            foreach(var b in editingButtons)b.Enabled=!value;sheetName.Enabled=!value;output.Enabled=!value;asOf.Enabled=!value;files.Enabled=!value;currentDate.Enabled=!value;
         }
         void StartBuild() {
             if(paths.Count==0) {MessageBox.Show(this,"Добавьте файлы проверяющих.",Text,MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
@@ -141,17 +144,23 @@ namespace ReviewMerge {
             string destination;
             try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
-            var selected=paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
+            var selected=paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;bool useCurrentDate=currentDate.Checked;
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append("Начата сборка "+selected.Count+" файлов.");
             var worker=new Thread(()=> {
                 try {
-                    var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token);
+                    var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token,useCurrentDate);
                     Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text="Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
                         Append("Дополнен сводный документ: "+result.Output);foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
                 } catch(OperationCanceledException) {Ui(()=>{Append("Сборка отменена. Итоговый файл не заменён.");Busy(false);cancellation.Dispose();cancellation=null;});}
                 catch(Exception ex) {Ui(()=>{Append("Ошибка: "+ex.Message);Busy(false);cancellation.Dispose();cancellation=null;MessageBox.Show(this,ex.Message,"Не удалось собрать свод",MessageBoxButtons.OK,MessageBoxIcon.Error);});}
             });worker.SetApartmentState(ApartmentState.STA);worker.IsBackground=true;worker.Start();
         }
+        void UpdateRule(){rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний.\n"+(currentDate.Checked?"Новые проверки — с текущей датой; даты уже внесённых проверок сохраняются.":"Проверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.")+"\nДанные дописываются в выбранный сводный документ. Статистика — на вкладке «Свод».";}
         void CancelBuild() {if(cancellation!=null) {cancellation.Cancel();cancel.Enabled=false;Append("Запрошена отмена.");}}
+    }
+    static class UserSettings {
+        static string PathName {get{return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ReviewMerge","settings.json");}}
+        public static bool LoadCurrentDate(){try{if(!File.Exists(PathName))return false;var values=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(PathName,Encoding.UTF8));object value;return values!=null&&values.TryGetValue("CurrentDateForNewReviews",out value)&&value is bool&&(bool)value;}catch{return false;}}
+        public static void SaveCurrentDate(bool value){Directory.CreateDirectory(Path.GetDirectoryName(PathName));File.WriteAllText(PathName,new JavaScriptSerializer().Serialize(new {CurrentDateForNewReviews=value}),new UTF8Encoding(false));}
     }
 }
