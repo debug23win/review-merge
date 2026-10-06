@@ -19,6 +19,12 @@ namespace ReviewMerge {
         readonly Dictionary<string,byte[]> entries=new Dictionary<string,byte[]>(StringComparer.Ordinal);
         XDocument book,rels,types,styles;
         int bodyStyle,headStyle,dateStyle,dateHeadStyle,intStyle,percentStyle,titleStyle,noteStyle;
+        readonly Dictionary<int,int> mainDateStyles=new Dictionary<int,int>();
+        int MainDateStyle(int original) {
+            int id;if(mainDateStyles.TryGetValue(original,out id))return id;
+            var xfs=styles.Root.Element(N+"cellXfs");var source=xfs.Elements().ElementAt(original);var xf=new XElement(source);xf.SetAttributeValue("numFmtId",(int)xfs.Elements().ElementAt(dateStyle).Attribute("numFmtId"));xf.SetAttributeValue("applyNumberFormat",1);id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);mainDateStyles[original]=id;return id;
+        }
+        static string BoxKey(MergedRow row){double box;string kind=Text(row.Values[10]).Trim().ToUpperInvariant();return double.TryParse(Text(row.Values[11]),NumberStyles.Float,Inv,out box)&&box>0&&box==Math.Floor(box)?(kind==""?"Не указан":kind)+"|"+box.ToString("0",Inv):"";}
         string mainPath;
         static string Text(object v) {return XlsxReader.Text(v);}
         XDocument Xml(string path) {using(var m=new MemoryStream(entries[path]))using(var r=XmlReader.Create(m,new XmlReaderSettings {DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null}))return XDocument.Load(r);}
@@ -129,7 +135,7 @@ namespace ReviewMerge {
             var firstBoxes=new HashSet<string>();var firstBoxDates=new Dictionary<string,double>();
             var boxKeys=new List<string>();var dates=new List<double?>();var issues=new List<int>();var checkedFlags=new List<int>();
             foreach(var r in result.Rows){
-                string kind=Text(r.Values[10]);double box;string key=(kind=="ПД"||kind=="ИИ"||kind=="ДПТ") && double.TryParse(Text(r.Values[11]),NumberStyles.Float,Inv,out box) && box>0 && box==Math.Floor(box) ? kind+"|"+box.ToString("0",Inv) : "";
+                string key=BoxKey(r);
                 int checked_=Text(r.Values[8])!=""?1:0;double? date=checked_==1?XlsxReader.DateSerial(r.Values[9]):null;
                 if(date.HasValue && r.FirstReviewDate.HasValue)date=Math.Min(date.Value,r.FirstReviewDate.Value);
                 int issue=r.Values.Skip(12).Take(6).Any(v=>Text(v)!="" && Text(v)!="0") || Text(r.Values[18])!="" || Text(r.Values[19])!=""?1:0;
@@ -145,10 +151,11 @@ namespace ReviewMerge {
                 if(noteLines>1&&notesChanged){xmlrow.SetAttributeValue("ht",Math.Min(120,Math.Max(30,noteLines*15)));xmlrow.SetAttributeValue("customHeight",1);}
                 for(int col=keep?9:1;col<=20;col++){
                     var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);
-                    if(keep&&row.TargetRow!=null&&Text(row.TargetRow.Values[col-1])==Text(row.Values[col-1]))continue;
+                    if(col!=10&&keep&&row.TargetRow!=null&&Text(row.TargetRow.Values[col-1])==Text(row.Values[col-1]))continue;
                     int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
                     if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
-                    SetCell(xmlrow,Cell(rn,col,row.Values[col-1],style));
+                    object value=row.Values[col-1];if(col==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&row.TargetRow!=null&&Text(row.TargetRow.Values[col-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
+                    SetCell(xmlrow,Cell(rn,col,value,style));
                 }
                 /* Calculation cells belong on the reference sheet, outside the main register. */
                 var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);

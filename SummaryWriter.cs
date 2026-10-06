@@ -51,8 +51,11 @@ namespace ReviewMerge {
         static string VolumeKey(MergedRow row) {
             string name=XlsxReader.Normal(row.Values[2]),ext=XlsxReader.Normal(row.Values[3]).TrimStart('.');
             if(ext!=""&&name.EndsWith("."+ext,StringComparison.Ordinal))name=name.Substring(0,name.Length-ext.Length-1);
-            name=Regex.Replace(name,@"\s*[\(\[ _,\-]*\bФРАГМЕНТ\s*(?:№|N)?\s*\d+(?:\s*ИЗ\s*\d+)?[\)\]]*","");
-            name=Regex.Replace(name,@"[-_ ]+И?УЛ$","");
+            for(int i=0;i<2;i++){
+                name=Regex.Replace(name,@"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])ФРАГМЕНТ\s*(?:№|N)?\s*\d+(?:\s*ИЗ\s*\d+)?[\)\]]*","");
+                name=Regex.Replace(name,@"[\(\[ _,\-]+ИЗМ[.\s]*\d+[\)\]]*$","");
+                name=Regex.Replace(name,@"[-_ ]+И?УЛ$","");
+            }
             return Regex.Replace(name,@"\s+"," ").Trim();
         }
         static void MergeTitle(XDocument doc,int row,int end) {
@@ -98,7 +101,7 @@ namespace ReviewMerge {
                 int rn=i+7,mr=rowNumbers[i];string u=MergeEngine.ExcelColumn(h)+rn,x=MergeEngine.ExcelColumn(h+3)+rn,y=MergeEngine.ExcelColumn(h+4)+rn,prior=MergeEngine.ExcelColumn(h+6)+rn;
                 string k=keys[i];int boxFirst=k!=""&&firstBoxes.Add(k)?1:0;double? boxDate=k!=""&&dates[i].HasValue&&boxes[k]==dates[i].Value&&usedBoxDate.Add(k)?dates[i]:null;
                 string kind=MainCell(name,"K",mr),box=MainCell(name,"L",mr),who=MainCell(name,"I",mr),file=MainCell(name,"C",mr),date=MainCell(name,"J",mr);
-                g.Set(rn,h,k,bodyStyle,"IF(AND(OR("+kind+"=\"ИИ\","+kind+"=\"ПД\","+kind+"=\"ДПТ\"),ISNUMBER("+box+"),"+box+">0),"+kind+"&\"|\"&TEXT("+box+",\"0\"),\"\")");
+                g.Set(rn,h,k,bodyStyle,"IF(AND(IFERROR(VALUE("+box+"),0)>0,IFERROR(VALUE("+box+"),0)=INT(IFERROR(VALUE("+box+"),0))),IF(TRIM("+kind+")=\"\",\"Не указан\",UPPER(TRIM("+kind+")))&\"|\"&TEXT(VALUE("+box+"),\"0\"),\"\")");
                 g.Set(rn,h+1,boxFirst,intStyle,"IF("+u+"=\"\",0,IF(COUNTIF("+LocalRange(h,7,rn)+","+u+")=1,1,0))");
                 g.Set(rn,h+2,boxDate.HasValue?(object)boxDate.Value:"",dateStyle,"IF(OR("+u+"=\"\","+y+"=\"\"),\"\",IF(COUNTIFS("+ur+","+u+","+yr+",\">0\","+yr+",\"<\"&"+y+")=0,IF(COUNTIFS("+LocalRange(h,7,rn)+","+u+","+LocalRange(h+4,7,rn)+","+y+")=1,"+y+",\"\"),\"\"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
@@ -160,7 +163,7 @@ namespace ReviewMerge {
             var other=Enumerable.Range(0,result.Rows.Count).Where(i=>!kinds.Contains(Text(result.Rows[i].Values[10]))).ToList();int otherChecked=other.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()),otherIssues=other.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()&&issues[i]==1);
             g.Set(48,1,"Не указан / иной",label);g.Set(48,2,other.Count,number,"COUNTA("+cr+")-SUM(B45:B47)");g.Set(48,3,otherChecked,number,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+lastDate+")-SUM(C45:C47)");g.Set(48,4,otherIssues,number,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+lastDate+","+zr+",1)-SUM(D45:D47)");g.Set(48,5,other.Count-otherChecked,number,"B48-C48");
             for(int r=22;r<=41;r++)if(r!=29&&r!=30&&r!=31)g.Heights[r]=r==35?45:32;
-            string[] reviewerHeads={"Фамилия проверяющего","Проверено томов","Томов с замечаниями","Томов за дату свода","Проверено файлов","Файлов без даты","Завершено коробов"};for(int c=0;c<reviewerHeads.Length;c++)g.Set(50,c+1,reviewerHeads[c],greenLabel);g.Heights[50]=48;
+            string[] reviewerHeads={"Фамилия проверяющего","Проверено томов","Томов с замечаниями","Томов за дату свода","Проверено файлов","Файлов без даты","Проверено коробов"};for(int c=0;c<reviewerHeads.Length;c++)g.Set(50,c+1,reviewerHeads[c],greenLabel);g.Heights[50]=48;
             var reviewers=result.Rows.Select(r=>Surname(Text(r.Values[8]))).Where(v=>v!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v,StringComparer.CurrentCulture).ToList();string ir=LocalRange(h+9,7,last),family=LocalRange(h+43,7,volumes.Count+6);
             WriteReference(g,h,50+reviewers.Count);
             WritePhysicalTotals(g,previous,reference,calendar,asOf,defaults,label,number,greenLabel,greenNumber,orangeLabel,orangeNumber,vr,wr,cr,xr,yr,result,dates,boxes);
@@ -178,6 +181,7 @@ namespace ReviewMerge {
             foreach(var row in g.Rows.Values)foreach(var c in row.Values.ToList())if(Column((string)c.Attribute("r"))<h){var f=c.Element(N+"f");if(f!=null)f.Value=ReferenceFormula(f.Value,h);}
             foreach(var row in g.Rows.Values)foreach(var key in row.Keys.Where(c=>c>=h&&c<h+HelperWidth).ToList())row.Remove(key);
             foreach(int rn in g.Rows.Where(r=>r.Value.Count==0).Select(r=>r.Key).ToList())g.Rows.Remove(rn);
+            MoveSummaryStatistics(g,end);
             XDocument doc=reference?new XDocument(previous):Sheet(g,new[]{Col(1,1,35),Col(2,end,11)},false,end);
             if(reference)doc.Root.Element(N+"sheetData").ReplaceWith(g.Data());
             var dimension=doc.Root.Element(N+"dimension");dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(Math.Max(end,g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(end).Max()))+g.Rows.Keys.Max());
@@ -186,7 +190,20 @@ namespace ReviewMerge {
             foreach(var col in visible)if((int)col.Attribute("max")>end)col.SetAttributeValue("max",end);
             columns.RemoveNodes();columns.Add(visible);for(int c=2;c<=end;c++)if(!visible.Any(e=>(int)e.Attribute("min")<=c&&(int)e.Attribute("max")>=c))columns.Add(Col(c,c,11));
             var sortedCols=columns.Elements().OrderBy(e=>(int)e.Attribute("min")).ToList();sortedCols.Remove();columns.Add(sortedCols);
-            MergeTitle(doc,1,end);MergeTitle(doc,20,end);MergeTitle(doc,30,end);MergeTitle(doc,42,end);PutSheet("Свод",doc);
+            var oldMerges=doc.Root.Element(N+"mergeCells");if(oldMerges!=null)oldMerges.Elements().Where(e=>Regex.IsMatch((string)e.Attribute("ref")??"",@"^A(?:20|30|32|34|42):")).Remove();
+            MergeTitle(doc,1,end);MergeTitle(doc,20,end);MergeTitle(doc,34,end);MergeTitle(doc,32,end);PutSheet("Свод",doc);
+            int sheetIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new{e,i}).First(x=>(string)x.e.Attribute("name")=="Свод").i;
+            var names=book.Root.Element(N+"definedNames");if(names==null){names=new XElement(N+"definedNames");var calc=book.Root.Element(N+"calcPr");if(calc!=null)calc.AddBeforeSelf(names);else book.Root.Add(names);}
+            names.Elements().Where(e=>(string)e.Attribute("name")=="_xlnm.Print_Area"&&(int?)e.Attribute("localSheetId")==sheetIndex).Remove();
+            names.Add(new XElement(N+"definedName",new XAttribute("name","_xlnm.Print_Area"),new XAttribute("localSheetId",sheetIndex),"'Свод'!$A$1:$"+MergeEngine.ExcelColumn(g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(end).Max())+"$"+g.Rows.Keys.Max()));
+        }
+        static void MoveSummaryStatistics(Grid g,int end) {
+            var map=new Dictionary<int,int>{{20,34},{21,35},{30,20},{31,21},{42,32}};for(int i=22;i<=28;i++)map[i]=i+14;for(int i=32;i<=41;i++)map[i]=i-10;
+            var moved=g.Rows.Where(r=>map.ContainsKey(r.Key)).Select(r=>new{Row=r.Key,Cells=r.Value.Values.Select(e=>new XElement(e)).ToList()}).ToList();
+            foreach(var item in moved)g.Rows.Remove(item.Row);
+            foreach(var item in moved){int row=map[item.Row];var cells=new SortedDictionary<int,XElement>();foreach(var c in item.Cells){int col=Column((string)c.Attribute("r"));c.SetAttributeValue("r",MergeEngine.ExcelColumn(col)+row);cells[col]=c;}g.Rows[row]=cells;}
+            var heights=g.Heights.Where(r=>map.ContainsKey(r.Key)).ToList();foreach(var item in heights)g.Heights.Remove(item.Key);foreach(var item in heights)g.Heights[map[item.Key]]=item.Value;
+            foreach(var c in g.Rows.Values.SelectMany(r=>r.Values)){var f=c.Element(N+"f");if(f==null)continue;f.Value=Regex.Replace(f.Value,@"(?<sheet>'[^']+'!)?\$?(?<col>[A-Z]{1,3})\$?(?<row>\d+)",m=>{if(m.Groups["sheet"].Success||Column(m.Groups["col"].Value)>Math.Max(7,end))return m.Value;int row=int.Parse(m.Groups["row"].Value);return map.ContainsKey(row)?m.Value.Substring(0,m.Value.Length-m.Groups["row"].Length)+map[row]:m.Value;});}
         }
         void WritePhysicalTotals(Grid g,XDocument previous,bool reference,List<double> calendar,DateTime asOf,int[] defaults,int label,int number,int greenLabel,int greenNumber,int orangeLabel,int orangeNumber,string vr,string wr,string cr,string xr,string yr,MergeResult result,List<double?> dates,Dictionary<string,double> boxes) {
             string physicalPath=PathFor("Справка по томам");var physical=physicalPath==null?null:Xml(physicalPath);bool usePhysical=physical!=null&&XlsxReader.Normal(Value(At(physical,1,1))).Contains("КОРОБ");

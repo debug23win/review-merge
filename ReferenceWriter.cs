@@ -20,6 +20,7 @@ namespace ReviewMerge {
             public readonly List<VolumeRecord> Volumes=new List<VolumeRecord>();
             public readonly Dictionary<string,double?> Completed=new Dictionary<string,double?>();
             public readonly Dictionary<string,string> CompletedBy=new Dictionary<string,string>();
+            public readonly List<VolumeRecord> BoxFiles=new List<VolumeRecord>();
         }
         ReferenceLayout referenceLayout;
         static string Surname(string value){return Regex.Split(value.Trim(),@"\s+")[0];}
@@ -46,6 +47,7 @@ namespace ReviewMerge {
                 string who=candidates.Count==1?candidates[0]:raw;layout.Names[raw]=who;
                 if(!layout.People.Values.Contains(who,StringComparer.OrdinalIgnoreCase)){int row=Enumerable.Range(0,15).Select(i=>12+i*2).FirstOrDefault(r=>!layout.People.ContainsKey(r));if(row==0)row=Math.Max(44,layout.People.Keys.DefaultIfEmpty(42).Max()+2);layout.People[row]=who;}
             }
+            for(int i=0;i<result.Rows.Count;i++){string raw=Text(result.Rows[i].Values[8]),who;if(!layout.Names.TryGetValue(raw,out who))who=raw;layout.BoxFiles.Add(new VolumeRecord{Box=BoxKey(result.Rows[i]),Who=who,Date=dates[i]});}
             foreach(double day in dates.Where(v=>v.HasValue).Select(v=>v.Value).Concat(new[]{asOf.ToOADate()}).Distinct().OrderBy(v=>v))if(!layout.Days.Values.Contains(day)){int col=2;while(layout.Days.ContainsKey(col))col+=7;layout.Days[col]=day;}
             int existingEnd=old==null?1:old.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).Where(c=>layout.OldHelper==0||c<layout.OldHelper).DefaultIfEmpty(1).Max();
             layout.End=Math.Max(existingEnd,layout.Days.Keys.DefaultIfEmpty(2).Max()+6);layout.Helper=Math.Max(96,layout.End+3);return layout;
@@ -78,24 +80,25 @@ namespace ReviewMerge {
             int last=l.Volumes.Count+6;string dates=LocalRange(h+13,7,last),keys=LocalRange(h+39,7,last),owners=LocalRange(h+40,7,last),display=LocalRange(h+41,7,last),flags=LocalRange(h+42,7,last);
             int label=StyleAt(old,12,1,bodyStyle),num=StyleAt(old,13,7,intStyle),boxStyle=StyleAt(old,12,2,bodyStyle),countStyle=StyleAt(old,13,2,intStyle),head=StyleAt(old,9,2,headStyle);
             if(old==null){g.Set(1,1,"Коробов получено",bodyStyle);g.Set(2,1,"Томов по проекту акта",bodyStyle);g.Set(8,1,"ФИО проверяющего",headStyle);}
-            g.Set(3,1,"ИТОГО коробов проверить",bodyStyle);g.Set(4,1,"ИТОГО томов проверить",bodyStyle);g.Set(42,1,"ИТОГО полностью проверено коробов",StyleAt(old,42,1,headStyle));g.Set(43,1,"ИТОГО проверено томов",StyleAt(old,43,1,headStyle));
-            l.ManifestStart=Math.Max(48,l.People.Keys.DefaultIfEmpty(40).Max()+6);var known=l.Volumes.Where(v=>v.Box!="").Select(v=>v.Box).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v,StringComparer.Ordinal).ToList();l.ManifestEnd=l.ManifestStart+Math.Max(1,known.Count)-1;
-            int title=l.ManifestStart-2,header=l.ManifestStart-1;g.Set(title,1,"КОНТРОЛЬ ПОЛНОЙ ПРОВЕРКИ КОРОБОВ",headStyle);
-            string[] headers={"Вид","Короб","Томов в реестре","Проверено томов","Всего томов по описи","Дата полной проверки","Состояние","Завершил проверку"};for(int c=0;c<headers.Length;c++)g.Set(header,c+1,headers[c],headStyle);g.Heights[header]=75;
-            var completion=l.Completed;var completedBy=l.CompletedBy;bool mapped=l.Volumes.All(v=>v.Box!="");
+            g.Set(3,1,"ИТОГО коробов проверить",bodyStyle);g.Set(4,1,"ИТОГО томов проверить",bodyStyle);g.Set(42,1,"ИТОГО проверено коробов",StyleAt(old,42,1,headStyle));g.Set(43,1,"ИТОГО проверено томов",StyleAt(old,43,1,headStyle));
+            l.ManifestStart=Math.Max(48,l.People.Keys.DefaultIfEmpty(40).Max()+6);var known=l.BoxFiles.Where(v=>v.Box!="").Select(v=>v.Box).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v,StringComparer.Ordinal).ToList();l.ManifestEnd=l.ManifestStart+Math.Max(1,known.Count)-1;
+            int title=l.ManifestStart-2,header=l.ManifestStart-1;g.Set(title,1,"УЧЁТ ПРОВЕРЕННЫХ КОРОБОВ",headStyle);
+            string[] headers={"Вид","Короб","Томов в реестре","Проверено томов","Всего томов по описи","Дата проверки короба","Состояние","Проверил короб"};for(int c=0;c<headers.Length;c++)g.Set(header,c+1,headers[c],headStyle);g.Heights[header]=75;
+            var completion=l.Completed;var completedBy=l.CompletedBy;int fileLast=l.BoxFiles.Count+6;string fileDates=LocalRange(h+4,7,fileLast),fileKeys=LocalRange(h,7,fileLast),fileOwners=LocalRange(h+9,7,fileLast);
             for(int i=0;i<known.Count;i++) {
                 int row=l.ManifestStart+i;string key=known[i];var members=l.Volumes.Where(v=>v.Box==key).ToList();int checkedCount=members.Count(v=>v.Date.HasValue);object expected;l.Expected.TryGetValue(key,out expected);double total;bool supplied=double.TryParse(Text(expected),NumberStyles.Float,Inv,out total)&&total>0;
-                double? date=checkedCount==members.Count&&((supplied&&total==members.Count)||(!supplied&&mapped))?(double?)members.Max(v=>v.Date.Value):null;completion[key]=date;string who=date.HasValue?members.First(v=>v.Date==date).Who:"";completedBy[key]=who;
+                var checkedFiles=l.BoxFiles.Where(v=>v.Box==key&&v.Date.HasValue&&v.Who!="").ToList();double? date=checkedFiles.Count>0?(double?)checkedFiles.Min(v=>v.Date.Value):null;completion[key]=date;string who=date.HasValue?checkedFiles.First(v=>v.Date==date).Who:"";completedBy[key]=who;
                 string k="$A"+row+"&\"|\"&TEXT($B"+row+",\"0\")";g.Set(row,1,key.Split('|')[0],bodyStyle);g.Set(row,2,double.Parse(key.Split('|')[1],Inv),intStyle);g.Set(row,3,members.Count,intStyle,"COUNTIF("+keys+","+k+")");g.Set(row,4,checkedCount,intStyle,"COUNTIFS("+keys+","+k+","+dates+",\">0\")");g.Set(row,5,expected,StyleAt(old,row,5,intStyle));
-                g.Set(row,6,date.HasValue?(object)date.Value:"",dateStyle,"IF(AND(C"+row+">0,D"+row+"=C"+row+",OR(AND(ISNUMBER(E"+row+"),E"+row+"=C"+row+"),AND(E"+row+"=\"\",COUNTIF("+keys+",\"\")=0))),IFERROR(_xlfn.AGGREGATE(14,6,"+dates+"/("+keys+"="+k+")/("+dates+">0),1),\"\"),\"\")");
-                g.Set(row,7,date.HasValue?"Проверен полностью":checkedCount<members.Count?"Есть непроверенные тома":"Полный состав не подтвержден",noteStyle,"IF(F"+row+"<>\"\",\"Проверен полностью\",IF(D"+row+"<C"+row+",\"Есть непроверенные тома\",\"Полный состав не подтвержден\"))");
-                g.Set(row,8,who,bodyStyle,"IF(F"+row+"=\"\",\"\",IFERROR(INDEX("+owners+",MATCH(1,INDEX(("+keys+"="+k+")*("+dates+"=F"+row+"),0),0)),\"\"))");
+                g.Set(row,6,date.HasValue?(object)date.Value:"",dateStyle,"IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/("+fileKeys+"="+k+")/("+fileDates+">0),1),\"\")");
+                g.Set(row,7,date.HasValue?"Проверен":"Нет даты и фамилии",noteStyle,"IF(F"+row+"<>\"\",\"Проверен\",\"Нет даты и фамилии\")");g.Heights[row]=36;
+                string rawOwner="INDEX("+fileOwners+",MATCH(1,INDEX(("+fileKeys+"="+k+")*("+fileDates+"=F"+row+"),0),0))";
+                g.Set(row,8,who,bodyStyle,"IF(F"+row+"=\"\",\"\",IFERROR(VLOOKUP("+rawOwner+",$"+MergeEngine.ExcelColumn(h+45)+"$7:$"+MergeEngine.ExcelColumn(h+46)+"$"+(l.Names.Count+6)+",2,FALSE),IFERROR("+rawOwner+",\"\")))");
             }
             string completed=LocalRange(6,l.ManifestStart,l.ManifestEnd),finishedWho=LocalRange(8,l.ManifestStart,l.ManifestEnd);var boxTotals=new List<string>();var volumeTotals=new List<string>();
             foreach(var day in l.Days) {
                 int start=day.Key;double serial=day.Value;string d="$"+MergeEngine.ExcelColumn(start)+"$8";g.Set(8,start,serial,StyleAt(old,8,start,dateHeadStyle));
                 for(int slot=0;slot<5;slot++){g.Set(9,start+slot,"Короб, вид",StyleAt(old,9,start+slot,head));g.Set(10,start+slot,"Томов за сутки",StyleAt(old,10,start+slot,head));g.Set(11,start+slot,slot+1,StyleAt(old,11,start+slot,intStyle));}
-                g.Set(9,start+5,"Завершено / томов",StyleAt(old,9,start+5,head));g.Set(9,start+6,"Примечание",StyleAt(old,9,start+6,head));
+                g.Set(9,start+5,"Коробов / томов",StyleAt(old,9,start+5,head));g.Set(9,start+6,"Примечание",StyleAt(old,9,start+6,head));
                 foreach(var person in l.People) {
                     int row=person.Key;string who=person.Value;g.Set(row,1,who,label);var items=l.Volumes.Where(v=>v.Date==serial&&v.Who==who).ToList();var boxList=items.Where(v=>v.Box!="").Select(v=>v.Box).Distinct().ToList();string personRef="$A"+row;
                     for(int slot=0;slot<5;slot++) {

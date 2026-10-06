@@ -33,7 +33,7 @@ def test_merge():
     temp.mkdir()
     result = temp/'result.xlsx'
     report = run(result, [ROOT/'tests/fixtures/Анна.xlsx', ROOT/'tests/fixtures/Борис.xlsx'])
-    assert (report['Documents'], report['Reviewed'], report['WithIssues'], report['Boxes']) == (7, 6, 4, 2), report
+    assert (report['Documents'], report['Reviewed'], report['WithIssues'], report['Boxes']) == (7, 6, 4, 3), report
     assert report['Conflicts'] == 11 and report['Problems'] == 3, report
     with zipfile.ZipFile(result) as z:
         wb = ET.fromstring(z.read('xl/workbook.xml'))
@@ -153,9 +153,12 @@ def test_complete_boxes_and_reviewers():
     temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'boxes.xlsx'
     wb=load_workbook(ROOT/'tests/fixtures/Анна.xlsx');main=wb['Все загруженные файлы']
     main.delete_rows(7,main.max_row)
-    documents=[('Том А Фрагмент 1','Анна',2,1),('Том А Фрагмент 2','Анна',2,1),('Том Б',None,None,1),('Том В','Борис',3,2),('Том Г','Борис',4,2),('Том Д',None,None,None),('Том А-УЛ','Анна',2,1)]
+    documents=[('Том А_фрагмент1','Анна',2,1),('Том А Фрагмент 2','Анна',2,1),('Том Б',None,None,1),('Том В_изм.1','Борис',3,2),('Том Г','Борис',4,2),('Том Д',None,None,None),('Том А-УЛ','Анна',2,1),('Том В-УЛ','Борис',3,2)]
     for r,(file,who,day,box) in enumerate(documents,7):
         for c,value in {1:r-6,3:file,4:'pdf',8:f'{r:08X}',9:who,10:datetime(2026,10,day) if day else None,11:'ПД',12:box}.items():main.cell(r,c,value)
+    main['J7']='02.10.2026';main['J7'].number_format='@'
+    from openpyxl.utils.datetime import to_excel
+    main['J8']=to_excel(datetime(2026,10,2));main['J8'].number_format='General'
     main.sheet_view.tabSelected=True
     other=wb['Служебный лист'];other.sheet_view.tabSelected=True
     wb.save(source);output=temp/'result.xlsx';run(output,[source])
@@ -164,17 +167,22 @@ def test_complete_boxes_and_reviewers():
     start=cached['Справка по томам'].cell(1,marker.column+3).value
     assert cached['Справка по томам'].cell(start,3).value==2
     assert cached['Справка по томам'].cell(start,4).value==1
-    assert cached['Справка по томам'].cell(start,6).value in (None,'')
-    assert cached['Справка по томам'].cell(start+1,6).value in (None,'')
+    assert cached['Справка по томам'].cell(start,6).value==datetime(2026,10,2)
+    assert cached['Справка по томам'].cell(start+1,6).value==datetime(2026,10,3)
     names={summary.cell(r,1).value:r for r in range(51,54)}
     assert summary.cell(names['Анна'],2).value==1 and summary.cell(names['Борис'],2).value==2
     assert summary.cell(names['Анна'],5).value==3
     assert sum(bool(sh.sheet_view.tabSelected) for sh in formulas)==1
     assert formulas.active.title=='Свод'
+    assert str(formulas['Свод'].print_area).endswith('$'+str(formulas['Свод'].max_row))
+    assert cached['Все загруженные файлы']['J7'].value==datetime(2026,10,2)
+    assert cached['Все загруженные файлы']['J8'].value==datetime(2026,10,2)
+    assert formulas['Все загруженные файлы']['J7'].number_format=='dd.mm.yyyy'
+    assert formulas['Все загруженные файлы']['J8'].number_format=='dd.mm.yyyy'
     ref.cell(start,5,2);ref.cell(start+1,5,2);formulas.save(output)
     run(output,[source]);after=load_workbook(output,data_only=True)['Справка по томам']
     assert after.cell(start,5).value==2 and after.cell(start+1,5).value==2
-    assert after.cell(start,6).value in (None,'') and after.cell(start+1,6).value==datetime(2026,10,4)
+    assert after.cell(start,6).value==datetime(2026,10,2) and after.cell(start+1,6).value==datetime(2026,10,3)
     assert sum(c.value=='ReviewMerge.FirstDates.v3' for c in load_workbook(output)['Справка по томам'][1])==1
 
 test_merge()
