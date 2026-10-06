@@ -150,7 +150,7 @@ namespace ReviewMerge {
                     if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
                     SetCell(xmlrow,Cell(rn,col,row.Values[col-1],style));
                 }
-                /* Statistics and their calculation cells belong on the summary sheet. */
+                /* Calculation cells belong on the reference sheet, outside the main register. */
                 var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
             }
             int maxCol=Math.Max(20,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(20).Max());
@@ -164,10 +164,19 @@ namespace ReviewMerge {
             var calc=book.Root.Element(N+"calcPr");if(calc==null){calc=new XElement(N+"calcPr");book.Root.Add(calc);}calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",1);calc.SetAttributeValue("calcId",0);
             rels.Root.Elements().Where(e=>((string)e.Attribute("Type")??"").EndsWith("/calcChain")).Remove();types.Root.Elements().Where(e=>((string)e.Attribute("PartName")??"").EndsWith("/calcChain.xml")).Remove();entries.Remove("xl/calcChain.xml");
             int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>(string)x.e.Attribute("name")=="Свод").i;
-            var view=book.Root.Element(N+"bookViews");if(view!=null && view.Elements().Any())view.Elements().First().SetAttributeValue("activeTab",svIndex);
+            var view=book.Root.Element(N+"bookViews");if(view==null){view=new XElement(N+"bookViews");book.Root.Element(N+"sheets").AddBeforeSelf(view);}if(!view.Elements().Any())view.Add(new XElement(N+"workbookView"));foreach(var workbookView in view.Elements())workbookView.SetAttributeValue("activeTab",svIndex);
+            foreach(var sheet in book.Root.Element(N+"sheets").Elements()) {
+                string sheetName=(string)sheet.Attribute("name"),path=PathFor(sheetName);var doc=Xml(path);
+                bool changed=false;
+                foreach(var sheetView in doc.Descendants(N+"sheetView")) {
+                    string selected=sheetName=="Свод"?"1":null;
+                    if((string)sheetView.Attribute("tabSelected")!=selected){sheetView.SetAttributeValue("tabSelected",selected);changed=true;}
+                }
+                if(changed)Store(path,doc);
+            }
             Store("xl/workbook.xml",book);Store("xl/_rels/workbook.xml.rels",rels);Store("[Content_Types].xml",types);Store("xl/styles.xml",styles);
             progress(90,"Сохранение XLSX с формулами");using(var s=new FileStream(output,FileMode.CreateNew))using(var z=new ZipArchive(s,ZipArchiveMode.Create)){foreach(var item in entries){token.ThrowIfCancellationRequested();var e=z.CreateEntry(item.Key,CompressionLevel.Optimal);using(var stream=e.Open())stream.Write(item.Value,0,item.Value.Length);}}
-            result.Boxes=firstBoxDates.Count(e=>e.Value<=asOf.Date.ToOADate());
+            result.Boxes=referenceLayout.Completed.Count(e=>e.Value.HasValue&&e.Value.Value<=asOf.Date.ToOADate());
         }
         static int Column(string s){int n=0;foreach(char c in s){if(c<'A'||c>'Z')break;n=n*26+c-'A'+1;}return n;}
     }

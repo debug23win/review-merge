@@ -52,6 +52,7 @@ namespace ReviewMerge {
             string name=XlsxReader.Normal(row.Values[2]),ext=XlsxReader.Normal(row.Values[3]).TrimStart('.');
             if(ext!=""&&name.EndsWith("."+ext,StringComparison.Ordinal))name=name.Substring(0,name.Length-ext.Length-1);
             name=Regex.Replace(name,@"\s*[\(\[ _,\-]*\bФРАГМЕНТ\s*(?:№|N)?\s*\d+(?:\s*ИЗ\s*\d+)?[\)\]]*","");
+            name=Regex.Replace(name,@"[-_ ]+И?УЛ$","");
             return Regex.Replace(name,@"\s+"," ").Trim();
         }
         static void MergeTitle(XDocument doc,int row,int end) {
@@ -69,23 +70,24 @@ namespace ReviewMerge {
             }
             if(calendar.Count==0)calendar.AddRange(result.Dates.Where(d=>d.DayOfWeek!=DayOfWeek.Saturday&&d.DayOfWeek!=DayOfWeek.Sunday||d.Date==asOf.Date||dates.Contains(d.ToOADate())).Select(d=>d.ToOADate()));
             if(!calendar.Contains(asOf.ToOADate()))calendar.Add(asOf.ToOADate());calendar=reference?calendar.Distinct().ToList():calendar.Distinct().OrderBy(d=>d).ToList();
-            int end=calendar.Count+1,h=Math.Max(14,end+2),last=result.Rows.Count+6,vh=h+12;
+            referenceLayout=PrepareReference(result,dates,asOf);
+            int end=calendar.Count+1,h=referenceLayout.Helper,last=result.Rows.Count+6,vh=h+12;
             var g=new Grid();var defaults=SummaryStyles();
             int label=reference?StyleAt(previous,7,1,defaults[0]):defaults[0],number=reference?StyleAt(previous,7,2,defaults[1]):defaults[1];
             int greenLabel=reference?StyleAt(previous,9,1,defaults[2]):defaults[2],greenNumber=reference?StyleAt(previous,9,2,defaults[3]):defaults[3];
             int orangeLabel=reference?StyleAt(previous,11,1,defaults[4]):defaults[4],orangeNumber=reference?StyleAt(previous,11,2,defaults[5]):defaults[5];
-            int oldHelper=0;if(previous!=null){var marker=previous.Root.Element(N+"sheetData").Elements(N+"row").Where(e=>(int)e.Attribute("r")==1).Elements(N+"c").FirstOrDefault(e=>Text(Value(e))=="ReviewMerge.FirstDates.v2");if(marker!=null)oldHelper=Column((string)marker.Attribute("r"));}
+            int oldHelper=HelperStart(previous);
             int oldReportEnd=oldHelper>0?Convert.ToInt32(Value(At(previous,1,oldHelper+2))??49,Inv):49;
             if(reference)foreach(var row in previous.Root.Element(N+"sheetData").Elements(N+"row")) {
                 int rn=(int)row.Attribute("r");double height;if(double.TryParse((string)row.Attribute("ht"),NumberStyles.Float,Inv,out height))g.Heights[rn]=height;
                 g.Templates[rn]=new XElement(row);
                 foreach(var c in row.Elements(N+"c")) {int col=Column((string)c.Attribute("r"));if(oldHelper>0&&col>=oldHelper&&col<=oldHelper+36)continue;if(rn>=20&&rn<=49&&col<=end)continue;
-                    if(oldHelper>0&&rn>=50&&rn<=oldReportEnd&&col<=5)continue;
+                    if((oldHelper>0||referenceLayout.OldHelper>0)&&rn>=50&&rn<=Math.Max(oldReportEnd,referenceLayout.OldHelper>0?Convert.ToInt32(Value(At(referenceLayout.Previous,1,referenceLayout.OldHelper+2))??49,Inv):49)&&col<=7)continue;
                     if(!g.Rows.ContainsKey(rn))g.Rows[rn]=new SortedDictionary<int,XElement>();g.Rows[rn][col]=new XElement(c);
                 }
             }
             if(!reference) {g.Set(1,1,"СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ",defaults[8]);g.Heights[1]=30;g.Set(4,1,"Кол-во дней проверки:",defaults[8]);g.Set(5,1,"По состоянию на:",defaults[8]);}
-            g.Set(1,h,"ReviewMerge.FirstDates.v2",bodyStyle);g.Set(1,h+1,asOf.ToOADate(),dateStyle);
+            g.Set(1,h,CalculationMarker,bodyStyle);g.Set(1,h+1,asOf.ToOADate(),dateStyle);
             string[] helperNames={"Ключ короба","Первый файл короба","Первая проверка короба","Файл проверен","Дата для статистики","Есть замечания","Первая дата из источников","Ключ исходной записи","Вид документации","Проверяющий","Строка основного листа","Имя файла"};
             for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);
             var tokens=Enumerable.Range(1,999).Select(n=>"\n"+n+". ").Concat(Enumerable.Range(1,999).Select(n=>"\n"+n+") ")).Concat(new[]{"\n- ","\n* ","\n• ","\n● ","\n▪ "}).ToList();
@@ -120,10 +122,10 @@ namespace ReviewMerge {
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Текстовые дополнительные замечания"};
             for(int t=0;t<8;t++)g.Set(6,vh+3+t,typeNames[t],bodyStyle);
             for(int j=0;j<volumes.Count;j++) {
-                int rn=j+7;var indices=volumes[j].Select(v=>v.Index).ToList();var vd=indices.Where(i=>dates[i].HasValue).Select(i=>dates[i].Value).ToList();double? d=vd.Count>0?(double?)vd.Min():null;int issue=indices.Any(i=>issues[i]==1)?1:0;
+                int rn=j+7;var indices=volumes[j].Select(v=>v.Index).ToList();var vd=indices.Where(i=>dates[i].HasValue).Select(i=>dates[i].Value).ToList();double? d=vd.Count==indices.Count?(double?)vd.Max():null;int issue=indices.Any(i=>issues[i]==1)?1:0;
                 volumeDates.Add(d);volumeIssues.Add(issue);var counts=new int[8];typeCounts.Add(counts);
                 string dateCells=GroupCells(h+4,indices),issueCells=GroupCells(h+5,indices);
-                g.Set(rn,vh,volumes[j].Key,bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF(COUNT("+dateCells+")=0,\"\",MIN("+dateCells+"))");g.Set(rn,vh+2,issue,intStyle,"MAX("+issueCells+")");
+                g.Set(rn,vh,volumes[j].Key,bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF(COUNT("+dateCells+")="+indices.Count+",MAX("+dateCells+"),\"\")");g.Set(rn,vh+2,issue,intStyle,"MAX("+issueCells+")");
                 for(int t=0;t<8;t++) {
                     int col=t<6?12+t:18+t-6;counts[t]=indices.Any(i=>t<6?Text(result.Rows[i].Values[col])=="1":Text(result.Rows[i].Values[col])!="")?1:0;
                     string f="MAX("+GroupCells(h+31+t,indices)+")";
@@ -134,6 +136,7 @@ namespace ReviewMerge {
                     if(f.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumes[j].Key);
                     g.Set(rn,vh+3+t,counts[t],intStyle,f);
                 }
+                ReferenceVolume(g,h,rn,indices,result,keys,dates,issue);
             }
             string xr=LocalRange(h+3,7,last),zr=LocalRange(h+5,7,last),wr=LocalRange(h+2,7,last),vr=LocalRange(h+1,7,last),cr=LocalRange(h+11,7,last),vdr=LocalRange(vh+1,7,volumes.Count+6),vir=LocalRange(vh+2,7,volumes.Count+6);
             g.Set(20,1,"СТАТИСТИКА ПО ОСНОВНОМУ ЛИСТУ",defaults[8]);g.Heights[20]=24;
@@ -141,7 +144,6 @@ namespace ReviewMerge {
             g.Set(30,1,"КОЛИЧЕСТВО ЗАМЕЧАНИЙ ПО ТИПАМ",defaults[8]);g.Heights[30]=24;g.Set(31,1,"Тип замечания",greenLabel);
             for(int t=0;t<8;t++)g.Set(32+t,1,typeNames[t],label);g.Set(40,1,"Всего отметок и текстовых замечаний",greenLabel);g.Set(41,1,"Томов с любыми замечаниями",orangeLabel);
             g.Set(42,1,"Отметки M:R считаются по томам. В S:T считаются пункты списка или отдельные абзацы; одинаковый текст в нескольких фрагментах учитывается один раз.",noteStyle);g.Heights[42]=32;
-            WritePhysicalTotals(g,previous,reference,calendar,asOf,defaults,label,number,greenLabel,greenNumber,orangeLabel,orangeNumber,vr,wr,cr,xr,yr,result,dates,boxes);
             for(int i=0;i<calendar.Count;i++) {
                 int c=i+2;double serial=calendar[i];string cs=MergeEngine.ExcelColumn(c),d=cs+"$5",criteria=",\">0\","+yr+",\"<=\"&"+d,vc=",\">0\","+vdr+",\"<=\"&"+d;bool future=serial>asOf.ToOADate();
                 g.Set(21,c,serial,StyleAt(previous,5,c,defaults[6]));g.Set(31,c,serial,StyleAt(previous,5,c,defaults[6]));
@@ -158,21 +160,31 @@ namespace ReviewMerge {
             var other=Enumerable.Range(0,result.Rows.Count).Where(i=>!kinds.Contains(Text(result.Rows[i].Values[10]))).ToList();int otherChecked=other.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()),otherIssues=other.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()&&issues[i]==1);
             g.Set(48,1,"Не указан / иной",label);g.Set(48,2,other.Count,number,"COUNTA("+cr+")-SUM(B45:B47)");g.Set(48,3,otherChecked,number,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+lastDate+")-SUM(C45:C47)");g.Set(48,4,otherIssues,number,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+lastDate+","+zr+",1)-SUM(D45:D47)");g.Set(48,5,other.Count-otherChecked,number,"B48-C48");
             for(int r=22;r<=41;r++)if(r!=29&&r!=30&&r!=31)g.Heights[r]=r==35?45:32;
-            string[] reviewerHeads={"Последний проверяющий","Проверено файлов","С замечаниями","Без даты"};for(int c=0;c<4;c++)g.Set(50,c+1,reviewerHeads[c],greenLabel);g.Heights[50]=36;
-            var reviewers=result.Rows.Select(r=>Text(r.Values[8])).Where(v=>v!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v,StringComparer.CurrentCulture).ToList();string ir=LocalRange(h+9,7,last);
+            string[] reviewerHeads={"Фамилия проверяющего","Проверено томов","Томов с замечаниями","Томов за дату свода","Проверено файлов","Файлов без даты","Завершено коробов"};for(int c=0;c<reviewerHeads.Length;c++)g.Set(50,c+1,reviewerHeads[c],greenLabel);g.Heights[50]=48;
+            var reviewers=result.Rows.Select(r=>Surname(Text(r.Values[8]))).Where(v=>v!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v,StringComparer.CurrentCulture).ToList();string ir=LocalRange(h+9,7,last),family=LocalRange(h+43,7,volumes.Count+6);
+            WriteReference(g,h,50+reviewers.Count);
+            WritePhysicalTotals(g,previous,reference,calendar,asOf,defaults,label,number,greenLabel,greenNumber,orangeLabel,orangeNumber,vr,wr,cr,xr,yr,result,dates,boxes);
             for(int n=0;n<reviewers.Count;n++) {
-                int r=51+n;string who=reviewers[n];var indices=Enumerable.Range(0,result.Rows.Count).Where(i=>string.Equals(Text(result.Rows[i].Values[8]),who,StringComparison.OrdinalIgnoreCase)).ToList();
+                int r=51+n;string who=reviewers[n];var indices=Enumerable.Range(0,result.Rows.Count).Where(i=>string.Equals(Surname(Text(result.Rows[i].Values[8])),who,StringComparison.OrdinalIgnoreCase)).ToList();var members=referenceLayout.Volumes.Where(v=>string.Equals(Surname(v.Who),who,StringComparison.OrdinalIgnoreCase)&&v.Date.HasValue&&v.Date.Value<=asOf.ToOADate()).ToList();
                 string crit="SUBSTITUTE(SUBSTITUTE(SUBSTITUTE($A"+r+",\"~\",\"~~\"),\"*\",\"~*\"),\"?\",\"~?\")";
-                g.Set(r,1,who,label);g.Set(r,2,indices.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()),number,"COUNTIFS("+ir+","+crit+","+yr+",\">0\","+yr+",\"<=\"&"+lastDate+")");g.Set(r,3,indices.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()&&issues[i]==1),number,"COUNTIFS("+ir+","+crit+","+yr+",\">0\","+yr+",\"<=\"&"+lastDate+","+zr+",1)");g.Set(r,4,indices.Count(i=>!dates[i].HasValue),number,"SUMPRODUCT(("+ir+"=$A"+r+")*("+xr+"=1)*("+yr+"=\"\"))");g.Heights[r]=30;
+                g.Set(r,1,who,label);g.Set(r,2,members.Count,number,"COUNTIFS("+family+","+crit+","+vdr+",\">0\","+vdr+",\"<=\"&"+lastDate+")");g.Set(r,3,members.Count(v=>v.Issue==1),number,"COUNTIFS("+family+","+crit+","+vdr+",\">0\","+vdr+",\"<=\"&"+lastDate+","+vir+",1)");g.Set(r,4,members.Count(v=>v.Date==asOf.ToOADate()),number,"COUNTIFS("+family+","+crit+","+vdr+","+lastDate+")");
+                string fileFamily="LEFT(TRIM("+ir+"),FIND(\" \",TRIM("+ir+")&\" \")-1)";
+                g.Set(r,5,indices.Count(i=>dates[i].HasValue&&dates[i].Value<=asOf.ToOADate()),number,"SUMPRODUCT(("+fileFamily+"=$A"+r+")*("+yr+">0)*("+yr+"<="+lastDate+"))");
+                g.Set(r,6,indices.Count(i=>!dates[i].HasValue),number,"SUMPRODUCT(("+fileFamily+"=$A"+r+")*("+xr+"=1)*("+yr+"=\"\"))");
+                string done="'Справка по томам'!"+LocalRange(6,referenceLayout.ManifestStart,referenceLayout.ManifestEnd),completedBy="'Справка по томам'!"+LocalRange(8,referenceLayout.ManifestStart,referenceLayout.ManifestEnd);
+                int completedCount=referenceLayout.Completed.Count(v=>v.Value.HasValue&&v.Value.Value<=asOf.ToOADate()&&string.Equals(Surname(referenceLayout.CompletedBy[v.Key]),who,StringComparison.OrdinalIgnoreCase));
+                g.Set(r,7,completedCount,number,"SUMPRODUCT((LEFT(TRIM("+completedBy+"),FIND(\" \",TRIM("+completedBy+")&\" \")-1)=$A"+r+")*("+done+">0)*("+done+"<="+lastDate+"))");g.Heights[r]=30;
             }
-            g.Set(1,h+2,50+reviewers.Count,intStyle);
+            foreach(var row in g.Rows.Values)foreach(var c in row.Values.ToList())if(Column((string)c.Attribute("r"))<h){var f=c.Element(N+"f");if(f!=null)f.Value=ReferenceFormula(f.Value,h);}
+            foreach(var row in g.Rows.Values)foreach(var key in row.Keys.Where(c=>c>=h&&c<h+HelperWidth).ToList())row.Remove(key);
+            foreach(int rn in g.Rows.Where(r=>r.Value.Count==0).Select(r=>r.Key).ToList())g.Rows.Remove(rn);
             XDocument doc=reference?new XDocument(previous):Sheet(g,new[]{Col(1,1,35),Col(2,end,11)},false,end);
             if(reference)doc.Root.Element(N+"sheetData").ReplaceWith(g.Data());
-            var dimension=doc.Root.Element(N+"dimension");dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(Math.Max(h+36,g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(h+36).Max()))+g.Rows.Keys.Max());
+            var dimension=doc.Root.Element(N+"dimension");dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(Math.Max(end,g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(end).Max()))+g.Rows.Keys.Max());
             var columns=doc.Root.Element(N+"cols");if(columns==null){columns=new XElement(N+"cols");doc.Root.Element(N+"sheetData").AddBeforeSelf(columns);}
             var visible=reference?columns.Elements().Where(e=>(int)e.Attribute("min")<=end).Select(e=>new XElement(e)).ToList():new List<XElement>{Col(1,1,35),Col(2,end,11)};
             foreach(var col in visible)if((int)col.Attribute("max")>end)col.SetAttributeValue("max",end);
-            columns.RemoveNodes();columns.Add(visible);for(int c=2;c<=end;c++)if(!visible.Any(e=>(int)e.Attribute("min")<=c&&(int)e.Attribute("max")>=c))columns.Add(Col(c,c,11));if(end+1<=h-1)columns.Add(Col(end+1,h-1,2));columns.Add(Col(h,h+36,18,true));
+            columns.RemoveNodes();columns.Add(visible);for(int c=2;c<=end;c++)if(!visible.Any(e=>(int)e.Attribute("min")<=c&&(int)e.Attribute("max")>=c))columns.Add(Col(c,c,11));
             var sortedCols=columns.Elements().OrderBy(e=>(int)e.Attribute("min")).ToList();sortedCols.Remove();columns.Add(sortedCols);
             MergeTitle(doc,1,end);MergeTitle(doc,20,end);MergeTitle(doc,30,end);MergeTitle(doc,42,end);PutSheet("Свод",doc);
         }
@@ -184,11 +196,11 @@ namespace ReviewMerge {
                 int c=i+2;string cs=MergeEngine.ExcelColumn(c),prev=MergeEngine.ExcelColumn(c-1),d=cs+"$5";double serial=calendar[i];
                 if(!reference||At(previous,5,c)==null) {g.Set(4,c,c-1,StyleAt(previous,4,2,defaults[9]));g.Set(5,c,serial,StyleAt(previous,5,2,defaults[6]));g.Set(6,c,17.0/24,StyleAt(previous,6,2,defaults[7]));}
                 if(usePhysical) {
-                    for(int r=7;r<=8;r++)if(!reference||At(previous,r,c)==null)g.Set(r,c,Value(At(physical,r-6,2)),number,"'Справка по томам'!B"+(r-6));
+                    for(int r=7;r<=8;r++)g.Set(r,c,Value(At(physical,r-6,2)),number,"'Справка по томам'!B"+(r-6));
                     if(serial>asOf.ToOADate())continue;
                     var cols=daily.Where(v=>v.Key<=serial).Select(v=>v.Value).ToList();
-                    for(int r=9;r<=10;r++)if(!reference||At(previous,r,c)==null||Value(At(previous,r,c))==null) {int sourceRow=r==9?42:43;double sum=cols.Select(n=>Value(At(physical,sourceRow,n))).OfType<double>().Sum();string f=cols.Count==0?"0":"SUM("+string.Join(",",cols.Select(n=>"'Справка по томам'!"+MergeEngine.ExcelColumn(n)+sourceRow))+")";g.Set(r,c,sum,greenNumber,f);}
-                    for(int r=11;r<=14;r++)if(!reference||At(previous,r,c)==null||Value(At(previous,r,c))==null) {string f=r==11?cs+"7-"+cs+"9":r==12?cs+"8-"+cs+"10":r==13?(i==0?cs+"9":cs+"9-"+prev+"9"):(i==0?cs+"10":cs+"10-"+prev+"10");g.Set(r,c,null,r==11||r==12?orangeNumber:number,f);}
+                    for(int r=9;r<=10;r++) {int sourceRow=r==9?42:43;double sum=cols.Select(n=>Value(At(physical,sourceRow,n))).OfType<double>().Sum();string f=cols.Count==0?"0":"SUM("+string.Join(",",cols.Select(n=>"'Справка по томам'!"+MergeEngine.ExcelColumn(n)+sourceRow))+")";g.Set(r,c,sum,greenNumber,f);}
+                    for(int r=11;r<=14;r++) {string f=r==11?cs+"7-"+cs+"9":r==12?cs+"8-"+cs+"10":r==13?(i==0?cs+"9":cs+"9-"+prev+"9"):(i==0?cs+"10":cs+"10-"+prev+"10");g.Set(r,c,null,r==11||r==12?orangeNumber:number,f);}
                 } else if(!reference) {
                     int checkedCount=dates.Count(v=>v.HasValue&&v.Value<=serial),totalBoxes=result.Rows.Select(r=>Text(r.Values[10])+"|"+Text(r.Values[11])).Where(k=>!k.EndsWith("|",StringComparison.Ordinal)).Distinct().Count(),boxCount=boxes.Count(v=>v.Value<=serial);
                     g.Set(7,c,totalBoxes,number,"SUM("+vr+")");g.Set(8,c,result.Documents,number,"COUNTA("+cr+")");g.Set(9,c,boxCount,greenNumber,"COUNTIFS("+wr+",\">0\","+wr+",\"<=\"&"+d+")");g.Set(10,c,checkedCount,greenNumber,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+d+")");g.Set(11,c,totalBoxes-boxCount,orangeNumber,cs+"7-"+cs+"9");g.Set(12,c,result.Documents-checkedCount,orangeNumber,cs+"8-"+cs+"10");g.Set(13,c,boxes.Count(v=>v.Value==serial),number,"COUNTIF("+wr+","+d+")");g.Set(14,c,dates.Count(v=>v==serial),number,"COUNTIF("+yr+","+d+")");

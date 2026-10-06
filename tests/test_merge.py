@@ -33,12 +33,12 @@ def test_merge():
     temp.mkdir()
     result = temp/'result.xlsx'
     report = run(result, [ROOT/'tests/fixtures/Анна.xlsx', ROOT/'tests/fixtures/Борис.xlsx'])
-    assert (report['Documents'], report['Reviewed'], report['WithIssues'], report['Boxes']) == (7, 6, 4, 3), report
+    assert (report['Documents'], report['Reviewed'], report['WithIssues'], report['Boxes']) == (7, 6, 4, 2), report
     assert report['Conflicts'] == 11 and report['Problems'] == 3, report
     with zipfile.ZipFile(result) as z:
         wb = ET.fromstring(z.read('xl/workbook.xml'))
         names = [s.get('name') for s in wb.findall('s:sheets/s:sheet', NS)]
-        assert set(names) == {'Все загруженные файлы', 'Свод', 'Служебный лист'}, names
+        assert set(names) == {'Все загруженные файлы', 'Свод', 'Справка по томам', 'Служебный лист'}, names
         main = cells(z, 'xl/worksheets/sheet1.xml')
         notes = [v for addr, (v, f) in main.items() if addr.startswith(('S','T'))]
         assert any('=1+1' in v for v in notes)
@@ -121,18 +121,21 @@ def test_template_and_fragments():
     assert s['A1'].value=='СВОДНАЯ ТАБЛИЦА' and s['A2'].value=='Мой объект'
     assert s['A7']._style==style and s['A17'].value=='Сохранить исходное примечание'
     assert s['A65'].value=='Пользовательский текст ниже статистики'
-    assert s['B10'].value=="='Справка по томам'!G43"
+    assert 'Справка по томам' in s['B10'].value
     assert m['U7'].value=='Пользовательские данные U' and m['AA7'].value=='Пользовательские данные AA'
     assert m['T7'].value=='Первое исходное замечание' and m['T8'].value=='Второе исходное замечание'
-    marker=next(c for c in s[1] if c.value=='ReviewMerge.FirstDates.v2');vh=marker.column+12
-    matching=[r for r in range(7,s.max_row+1) if s.cell(r,vh).value=='ЛЮБОЙ ШИФР A/7']
+    p=w['Справка по томам'];marker=next(c for c in p[1] if c.value=='ReviewMerge.FirstDates.v3');vh=marker.column+12
+    assert not any(c.value=='ReviewMerge.FirstDates.v3' for c in s[1])
+    assert p['B1'].value==50 and p['B2'].value==800
+    matching=[r for r in range(7,p.max_row+1) if p.cell(r,vh).value=='ЛЮБОЙ ШИФР A/7']
     assert len(matching)==1,matching
-    vc=s.cell(matching[0],vh+3);assert vc.value.startswith('=MAX(')
-    cached=load_workbook(output,data_only=True)['Свод'];assert cached.cell(matching[0],vh+9).value==2
+    vc=p.cell(matching[0],vh+3);assert vc.value.startswith('=MAX(')
+    cached=load_workbook(output,data_only=True)['Справка по томам'];assert cached.cell(matching[0],vh+9).value==2
     assert cached.cell(matching[0],vh+10).value==2
     before_notes=m['T7'].value,m['T8'].value;run(output,[source]);s2=load_workbook(output)['Свод'];m2=load_workbook(output)['Все загруженные файлы']
     assert before_notes==(m2['T7'].value,m2['T8'].value)
-    assert s2['B10'].value=="='Справка по томам'!G43"
+    assert 'Справка по томам' in s2['B10'].value
+    assert sum(bool(v.tabSelected) for sh in load_workbook(output) for v in sh.views.sheetView)==1
 
 def test_legacy_annotations():
     temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'legacy.xlsx';shutil.copyfile(ROOT/'tests/fixtures/Анна.xlsx',source)
@@ -146,9 +149,39 @@ def test_legacy_annotations():
     assert all(ws.cell(5,c).value is None and ws.cell(7,c).value is None for c in range(21,28))
     run(output,[source]);assert load_workbook(output)['Все загруженные файлы']['T7'].value=='Первый текст\n\nВторой текст'
 
+def test_complete_boxes_and_reviewers():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'boxes.xlsx'
+    wb=load_workbook(ROOT/'tests/fixtures/Анна.xlsx');main=wb['Все загруженные файлы']
+    main.delete_rows(7,main.max_row)
+    documents=[('Том А Фрагмент 1','Анна',2,1),('Том А Фрагмент 2','Анна',2,1),('Том Б',None,None,1),('Том В','Борис',3,2),('Том Г','Борис',4,2),('Том Д',None,None,None),('Том А-УЛ','Анна',2,1)]
+    for r,(file,who,day,box) in enumerate(documents,7):
+        for c,value in {1:r-6,3:file,4:'pdf',8:f'{r:08X}',9:who,10:datetime(2026,10,day) if day else None,11:'ПД',12:box}.items():main.cell(r,c,value)
+    main.sheet_view.tabSelected=True
+    other=wb['Служебный лист'];other.sheet_view.tabSelected=True
+    wb.save(source);output=temp/'result.xlsx';run(output,[source])
+    formulas=load_workbook(output);cached=load_workbook(output,data_only=True)
+    ref=formulas['Справка по томам'];summary=cached['Свод'];marker=next(c for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3')
+    start=cached['Справка по томам'].cell(1,marker.column+3).value
+    assert cached['Справка по томам'].cell(start,3).value==2
+    assert cached['Справка по томам'].cell(start,4).value==1
+    assert cached['Справка по томам'].cell(start,6).value in (None,'')
+    assert cached['Справка по томам'].cell(start+1,6).value in (None,'')
+    names={summary.cell(r,1).value:r for r in range(51,54)}
+    assert summary.cell(names['Анна'],2).value==1 and summary.cell(names['Борис'],2).value==2
+    assert summary.cell(names['Анна'],5).value==3
+    assert sum(bool(sh.sheet_view.tabSelected) for sh in formulas)==1
+    assert formulas.active.title=='Свод'
+    ref.cell(start,5,2);ref.cell(start+1,5,2);formulas.save(output)
+    run(output,[source]);after=load_workbook(output,data_only=True)['Справка по томам']
+    assert after.cell(start,5).value==2 and after.cell(start+1,5).value==2
+    assert after.cell(start,6).value in (None,'') and after.cell(start+1,6).value==datetime(2026,10,4)
+    assert sum(c.value=='ReviewMerge.FirstDates.v3' for c in load_workbook(output)['Справка по томам'][1])==1
+
 test_merge()
 test_existing_target()
 test_user_columns()
 test_template_and_fragments()
 test_legacy_annotations()
+test_complete_boxes_and_reviewers()
 print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas and repeated merge')
+

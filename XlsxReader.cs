@@ -90,18 +90,18 @@ namespace ReviewMerge {
         }
         static Dictionary<string,double> SummaryDates(ZipArchive zip,XDocument workbook,XDocument rels,IList<string> strings) {
             var result=new Dictionary<string,double>(StringComparer.Ordinal);
-            var sheet=workbook.Root.Element(Ns+"sheets").Elements().FirstOrDefault(e=>string.Equals(((string)e.Attribute("name")??"").Trim(),"Свод",StringComparison.OrdinalIgnoreCase));
-            if(sheet==null)return result;
-            string rid=(string)sheet.Attribute(Rel+"id");var rel=rels.Root.Elements().FirstOrDefault(e=>(string)e.Attribute("Id")==rid);
-            if(rel==null)return result;string path=((string)rel.Attribute("Target")).Replace('\\','/');path=path.StartsWith("/")?path.TrimStart('/') : "xl/"+path;
-            var rows=Load(zip,path).Descendants(Ns+"sheetData").Elements(Ns+"row").ToList();
-            var marker=rows.Where(e=>(int)e.Attribute("r")==1).Elements(Ns+"c").FirstOrDefault(e=>Text(RawValue(e,strings))=="ReviewMerge.FirstDates.v2");
-            if(marker==null)return result;int start=Column((string)marker.Attribute("r"));
-            foreach(var row in rows.Where(e=>(int)e.Attribute("r")>=7)) {
-                string key=Text(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+7),strings));
-                try{key=Encoding.UTF8.GetString(Convert.FromBase64String(key));}catch(FormatException){continue;}
-                double? date=DateSerial(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+6),strings));
-                if(key!=""&&date.HasValue&&(!result.ContainsKey(key)||result[key]>date.Value))result[key]=date.Value;
+            foreach(var sheet in workbook.Root.Element(Ns+"sheets").Elements().Where(e=>new[]{"Свод","Справка по томам"}.Contains(((string)e.Attribute("name")??"").Trim(),StringComparer.OrdinalIgnoreCase))) {
+                string rid=(string)sheet.Attribute(Rel+"id");var rel=rels.Root.Elements().FirstOrDefault(e=>(string)e.Attribute("Id")==rid);
+                if(rel==null)continue;string path=((string)rel.Attribute("Target")).Replace('\\','/');path=path.StartsWith("/")?path.TrimStart('/') : "xl/"+path;
+                var rows=Load(zip,path).Descendants(Ns+"sheetData").Elements(Ns+"row").ToList();
+                var marker=rows.Where(e=>(int)e.Attribute("r")==1).Elements(Ns+"c").FirstOrDefault(e=>Text(RawValue(e,strings)).StartsWith("ReviewMerge.FirstDates.v",StringComparison.Ordinal));
+                if(marker==null)continue;int start=Column((string)marker.Attribute("r"));
+                foreach(var row in rows.Where(e=>(int)e.Attribute("r")>=7)) {
+                    string key=Text(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+7),strings));
+                    try{key=Encoding.UTF8.GetString(Convert.FromBase64String(key));}catch(FormatException){continue;}
+                    double? date=DateSerial(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+6),strings));
+                    if(key!=""&&date.HasValue&&(!result.ContainsKey(key)||result[key]>date.Value))result[key]=date.Value;
+                }
             }
             return result;
         }
