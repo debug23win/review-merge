@@ -40,7 +40,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = $env:GITHUB_REF_NAME
-          if ($env:GITHUB_REF == 'refs/heads/main') {
+          if ($env:GITHUB_REF -eq 'refs/heads/main') {
             $appVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $PWD 'Свод_проверки.exe')).FileVersion
             $tag = 'v' + ([version]$appVersion).ToString(3)
           }
