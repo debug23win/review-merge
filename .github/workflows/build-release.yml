@@ -22,14 +22,12 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          $version = '1.1.0'
+          $version = '1.2.0'
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
           ./build.ps1 -Version $version
       - name: Test merging and update validation
         shell: pwsh
         run: |
-          python -m pip install openpyxl
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency setup failed' }
           python tests/test_merge.py
           if ($LASTEXITCODE -ne 0) { throw 'Merge tests failed' }
           ./tests/test_updates.ps1

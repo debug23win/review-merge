@@ -67,7 +67,6 @@ namespace ReviewMerge {
         static string JoinNotes(IEnumerable<SourceRow> rows, int col) {
             var seen = new HashSet<string>(StringComparer.Ordinal);
             var notes = new List<string>();
-            var tagged = new List<string>();
             foreach (var r in rows) {
                 string value = Txt(r.Values[col]).Replace("\r\n", "\n");
                 if (value == "") continue;
@@ -76,13 +75,14 @@ namespace ReviewMerge {
                     bool annotated = r.IsConsolidated && Regex.IsMatch(part,@"^\[[^\]\n]+, (?:\d{2}\.\d{2}\.\d{4}|\(пусто\))\] ");
                     string text = annotated ? Regex.Replace(part,@"^\[[^\]\n]+\] ","") : part;
                     if (!seen.Add(text)) continue;
+                    if (notes.Any(n => ("\n\n" + n + "\n\n").Contains("\n\n" + text + "\n\n"))) continue;
                     notes.Add(text);
-                    tagged.Add(annotated ? part : "[" + (Txt(r.Values[8]) == "" ? "без проверяющего" : Txt(r.Values[8])) + ", " + Pretty(9, r.Values[9]) + "] " + part);
                 }
             }
             if (notes.Count == 0) return null;
             if (notes.Count == 1) return notes[0];
-            return string.Join("\n\n", tagged);
+            // Only source text belongs in a remark. Older generated attribution is removed above.
+            return string.Join("\n\n", notes);
         }
         public static MergeResult Collect(IList<string> files, string sheetName, DateTime asOf, Action<int,string> progress, CancellationToken token) {
             if (files.Count == 0) throw new InvalidOperationException("Добавьте хотя бы один файл .xlsx.");
@@ -160,7 +160,7 @@ namespace ReviewMerge {
                     if (distinct.Count < 2) continue;
                     string decision = col == 8 || col == 9 ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                         col == 10 || col == 11 ? "Первое непустое значение в порядке файлов; требуется сверка реквизитов." :
-                        col < 18 ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные тексты объединены с указанием проверяющего и даты.";
+                        col < 18 ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные исходные тексты объединены без добавления фамилий и дат.";
                     result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = ExcelColumn(col+1) + " — " + Fields[col-8],
                         Details = string.Join("\n",active.Select(r => SourceDescription(r,col))), Decision = decision });
                 }

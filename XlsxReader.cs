@@ -80,6 +80,31 @@ namespace ReviewMerge {
                 DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 150000000 }))
                 return XDocument.Load(reader);
         }
+        static object RawValue(XElement cell,IList<string> strings) {
+            if(cell==null)return null;
+            string type=(string)cell.Attribute("t"),raw=(string)cell.Element(Ns+"v");
+            if(type=="inlineStr")return string.Concat(cell.Descendants(Ns+"t").Select(t=>t.Value));
+            int index;if(type=="s"&&int.TryParse(raw,out index)&&index>=0&&index<strings.Count)return strings[index];
+            double number;if(type!="str"&&type!="e"&&double.TryParse(raw,NumberStyles.Float,Inv,out number))return number;
+            return raw;
+        }
+        static Dictionary<string,double> SummaryDates(ZipArchive zip,XDocument workbook,XDocument rels,IList<string> strings) {
+            var result=new Dictionary<string,double>(StringComparer.Ordinal);
+            var sheet=workbook.Root.Element(Ns+"sheets").Elements().FirstOrDefault(e=>string.Equals(((string)e.Attribute("name")??"").Trim(),"Свод",StringComparison.OrdinalIgnoreCase));
+            if(sheet==null)return result;
+            string rid=(string)sheet.Attribute(Rel+"id");var rel=rels.Root.Elements().FirstOrDefault(e=>(string)e.Attribute("Id")==rid);
+            if(rel==null)return result;string path=((string)rel.Attribute("Target")).Replace('\\','/');path=path.StartsWith("/")?path.TrimStart('/') : "xl/"+path;
+            var rows=Load(zip,path).Descendants(Ns+"sheetData").Elements(Ns+"row").ToList();
+            var marker=rows.Where(e=>(int)e.Attribute("r")==1).Elements(Ns+"c").FirstOrDefault(e=>Text(RawValue(e,strings))=="ReviewMerge.FirstDates.v2");
+            if(marker==null)return result;int start=Column((string)marker.Attribute("r"));
+            foreach(var row in rows.Where(e=>(int)e.Attribute("r")>=7)) {
+                string key=Text(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+7),strings));
+                try{key=Encoding.UTF8.GetString(Convert.FromBase64String(key));}catch(FormatException){continue;}
+                double? date=DateSerial(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+6),strings));
+                if(key!=""&&date.HasValue&&(!result.ContainsKey(key)||result[key]>date.Value))result[key]=date.Value;
+            }
+            return result;
+        }
         static int Column(string address) {
             int result = 0;
             foreach (char ch in address) { if (ch < 'A' || ch > 'Z') break; result = result * 26 + ch - 'A' + 1; }
@@ -107,6 +132,7 @@ namespace ReviewMerge {
                     strings.AddRange(Load(zip, "xl/sharedStrings.xml").Root.Elements(Ns + "si")
                         .Select(e => string.Concat(e.Descendants(Ns + "t").Select(t => t.Value))));
                 bool date1904 = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904") == "1";
+                var summaryDates=SummaryDates(zip,workbook,rels,strings);
                 var data = Load(zip, target);
                 var all = new List<SourceRow>();
                 foreach (var xmlRow in data.Descendants(Ns + "sheetData").Elements(Ns + "row")) {
@@ -146,6 +172,7 @@ namespace ReviewMerge {
                 foreach (var row in all.Where(r => r.Row >= result.DataStart)) {
                     row.IsConsolidated = knownFirstDate;
                     if (knownFirstDate) row.PriorFirstDate = DateSerial(row.FirstDateSource);
+                    double prior;if(summaryDates.TryGetValue(Key(row),out prior))row.PriorFirstDate=row.PriorFirstDate.HasValue?Math.Min(prior,row.PriorFirstDate.Value):prior;
                     if (Text(row.Values[2]) != "") result.Rows.Add(row);
                     else if (row.Values.Skip(8).Any(v => Text(v) != "")) result.Orphans.Add(row);
                 }
