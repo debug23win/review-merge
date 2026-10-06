@@ -107,9 +107,9 @@ namespace ReviewMerge {
                 string volumeKey=VolumeKey(result.Rows[i]);g.Set(rn,h+28,volumeKey,bodyStyle);
                 for(int t=0;t<2;t++) {string source=MainCell(name,t==0?"S":"T",mr),clean=MergeEngine.ExcelColumn(h+25+t)+rn,countRef=MergeEngine.ExcelColumn(h+23+t)+rn,volumeRef=MergeEngine.ExcelColumn(h+28)+rn,text=RemarkCounter.Normalize(Text(result.Rows[i].Values[18+t]));int count=RemarkCounter.Count(text);
                     g.Set(rn,h+25+t,text,bodyStyle,RemarkCounter.NormalizeFormula(source));g.Set(rn,h+23+t,count,intStyle,RemarkCounter.Formula(source,clean,LocalRange(h+27,1,tokens.Count)));
-                    string escaped="SUBSTITUTE(SUBSTITUTE(SUBSTITUTE("+clean+",\"~\",\"~~\"),\"*\",\"~*\"),\"?\",\"~?\")",escapedKey="SUBSTITUTE(SUBSTITUTE(SUBSTITUTE("+volumeRef+",\"~\",\"~~\"),\"*\",\"~*\"),\"?\",\"~?\")";
                     int unique=seenRemarks.Add(volumeKey+"\u001f"+t+"\u001f"+text)?count:0;
-                    g.Set(rn,h+29+t,unique,intStyle,"IF("+countRef+"=0,0,IF(COUNTIFS("+LocalRange(h+28,7,rn)+","+escapedKey+","+LocalRange(h+25+t,7,rn)+","+escaped+")=1,"+countRef+",0))");
+                    // Literal comparisons support comments longer than the COUNTIFS criteria limit.
+                    g.Set(rn,h+29+t,unique,intStyle,"IF("+countRef+"=0,0,IF(SUMPRODUCT(("+LocalRange(h+28,7,rn)+"="+volumeRef+")*("+LocalRange(h+25+t,7,rn)+"="+clean+"))=1,"+countRef+",0))");
                 }
                 for(int t=0;t<6;t++)g.Set(rn,h+31+t,Text(result.Rows[i].Values[12+t])=="1"?1:0,intStyle,"IF(COUNTIF("+MainCell(name,MergeEngine.ExcelColumn(13+t),mr)+",1)>0,1,0)");
                 g.Set(rn,h+8,Text(result.Rows[i].Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+kind+")");g.Set(rn,h+9,Text(result.Rows[i].Values[8]),bodyStyle,"IF("+who+"=\"\",\"\","+who+")");g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(result.Rows[i].Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
