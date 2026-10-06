@@ -46,7 +46,7 @@ jobs:
           }
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           $exists = $LASTEXITCODE -eq 0
-          if ($exists -and $env:GITHUB_REF == 'refs/heads/main') { exit 0 }
+          if ($exists -and $env:GITHUB_REF -eq 'refs/heads/main') { exit 0 }
           if (!$exists) {
             gh release create $tag --target $env:GITHUB_SHA --repo $env:GITHUB_REPOSITORY --title $tag --notes-file RELEASE_NOTES.md
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
