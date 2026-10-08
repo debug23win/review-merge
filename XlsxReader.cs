@@ -14,6 +14,8 @@ namespace ReviewMerge {
         public int Row;
         public string File;
         public object[] Values = new object[20];
+        // Values as they are in the file when Values were interpreted (a mark "да" read as 1).
+        public object[] Written;
         public object FirstDateSource;
         public double? PriorFirstDate;
         public bool IsConsolidated;
@@ -43,7 +45,7 @@ namespace ReviewMerge {
                 return null;
             }
             DateTime dt;
-            var s = Text(value);
+            var s = Regex.Replace(Text(value), @"\s*(?:г\.?|года)\s*$", "", RegexOptions.IgnoreCase);
             var formats = new [] { "dd.MM.yyyy", "d.M.yyyy", "dd.MM.yy", "yyyy-MM-dd", "dd/MM/yyyy", "dd.MM.yyyy HH:mm", "yyyy-MM-ddTHH:mm:ss" };
             if (DateTime.TryParseExact(s, formats, new CultureInfo("ru-RU"), DateTimeStyles.AllowWhiteSpaces, out dt))
                 return dt.Year >= 2000 && dt.Year < 2200 ? (double?)dt.Date.ToOADate() : null;
@@ -93,7 +95,7 @@ namespace ReviewMerge {
             foreach(var sheet in workbook.Root.Element(Ns+"sheets").Elements().Where(e=>new[]{"Свод","Справка по томам"}.Contains(((string)e.Attribute("name")??"").Trim(),StringComparer.OrdinalIgnoreCase))) {
                 string rid=(string)sheet.Attribute(Rel+"id");var rel=rels.Root.Elements().FirstOrDefault(e=>(string)e.Attribute("Id")==rid);
                 if(rel==null)continue;string path=((string)rel.Attribute("Target")).Replace('\\','/');path=path.StartsWith("/")?path.TrimStart('/') : "xl/"+path;
-                var rows=Load(zip,path).Descendants(Ns+"sheetData").Elements(Ns+"row").ToList();
+                var doc=Load(zip,path);Rules.NumberCells(doc);var rows=doc.Descendants(Ns+"sheetData").Elements(Ns+"row").ToList();
                 var marker=rows.Where(e=>(int)e.Attribute("r")==1).Elements(Ns+"c").FirstOrDefault(e=>Text(RawValue(e,strings)).StartsWith("ReviewMerge.FirstDates.v",StringComparison.Ordinal));
                 if(marker==null)continue;int start=Column((string)marker.Attribute("r"));
                 foreach(var row in rows.Where(e=>(int)e.Attribute("r")>=7)) {
@@ -134,6 +136,7 @@ namespace ReviewMerge {
                 bool date1904 = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904") == "1";
                 var summaryDates=SummaryDates(zip,workbook,rels,strings);
                 var data = Load(zip, target);
+                Rules.NumberCells(data);
                 var all = new List<SourceRow>();
                 foreach (var xmlRow in data.Descendants(Ns + "sheetData").Elements(Ns + "row")) {
                     int rn;

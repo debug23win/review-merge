@@ -11,15 +11,15 @@ try {
     $longNote='1. '+('Текст искусственного замечания. '*15)+"`n2. Второй пункт`n3. Третий пункт`n4. Четвёртый пункт"
     $main.Range('S7:S8').Value2=$longNote
     $excelApp.CalculateFullRebuild()
-    if($summary.Range('B28').Value2 -ne 4){throw 'Long duplicate comments were counted incorrectly'}
+    if($summary.Range('B28').Value2 -ne 1){throw 'A filled S field must count once per volume'}
     $main.Range('S8').Value2=$longNote+' Другое замечание'
     $excelApp.CalculateFullRebuild()
-    if($summary.Range('B28').Value2 -ne 8){throw 'Different long comments were counted incorrectly'}
+    if($summary.Range('B28').Value2 -ne 1){throw 'Different texts in one volume must still count once'}
     $main.Range('S7:S8').Value2=''
     $excelApp.CalculateFullRebuild()
     if($summary.Range('B28').Value2 -ne 0){throw 'Blank comments were counted incorrectly'}
     if($bookCheck.Windows.Item(1).SelectedSheets.Count -ne 1){throw 'Grouped sheets remain'}
-    Write-Output 'Excel tests passed: long text, fragment duplicates, changed text and blank comments'
+    Write-Output 'Excel tests passed: filled remark fields per volume, changed text and blank comments'
 } finally {
     if($bookCheck){$bookCheck.Close($false);[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($bookCheck)}
     if($excelApp){$excelApp.Quit();[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($excelApp)}

@@ -61,7 +61,6 @@ namespace DesktopUpdates {
                 using(var input=entry.Open())using(var output=File.Create(Path.Combine(stage,entry.FullName)))input.CopyTo(output);
             }
             if(!File.Exists(Path.Combine(stage,AppInfo.Executable)))throw new InvalidDataException("В пакете отсутствует программа.");
-            if(AppInfo.UpdateFiles.Contains("Recognize.ps1")&&!File.Exists(Path.Combine(stage,"Recognize.ps1")))throw new InvalidDataException("В пакете отсутствует модуль OCR.");
         }
         public static string Download(ReleaseInfo release,string cacheRoot=null) {
             string cache=cacheRoot??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DocumentReviewTools",AppInfo.Product,"updates");
@@ -90,7 +89,7 @@ namespace DesktopUpdates {
             link.LinkClicked+=async (s,e)=>{
                 if(busy()){MessageBox.Show(form,"Дождитесь завершения текущей проверки или свода.","Обновления");return;}
                 if(latest==null||latest.Version<=new Version(Current.ToString(3))){check(true);return;}
-                if(MessageBox.Show(form,"Установить версию "+latest.Version.ToString(3)+" из GitHub Releases? Программа перезапустится. Результаты проверки сохраните перед обновлением.","Обновление",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+                if(MessageBox.Show(form,"Установить версию "+latest.Version.ToString(3)+"? Программа перезапустится. Результаты проверки сохраните перед обновлением.","Обновление",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
                 link.Enabled=false;link.Text="Загрузка обновления…";form.Enabled=false;
                 try{
                     string destination=Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
