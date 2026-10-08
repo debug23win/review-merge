@@ -395,6 +395,50 @@ def test_names_suffixed_iul_inserted_rows():
     assert labels.get(42)=='Зинзюк Евгений Анатольевич' and labels.get(44)=='ИТОГО проверено коробов' and labels.get(45)=='ИТОГО проверено томов',labels
     assert sum(str(v).startswith('ИТОГО проверено коробов') for v in labels.values())==1,labels
 
+def test_inserted_rows_keep_notes_and_box_counts():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir()
+    source=book(temp/'source.xlsx',[{3:'Том 1',9:'Анна',10:datetime(2026,10,2),12:1},{3:'Том 2',12:2}])
+    target=book(temp/'svod.xlsx',[{3:'Том 1'},{3:'Том 2'}],['Анна'])
+    run(target,[source]);w=load_workbook(target);ref=w['Справка по томам']
+    h=next(c.column for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3');start=ref.cell(1,h+3).value
+    ref.cell(start,5,111);ref.cell(start+1,5,222)
+    ref.insert_rows(42,12);ref['A42']='Зинзюк Евгений Анатольевич';ref['A52']='Новиков Олег Иванович'
+    ref['J42']='Записка первого проверяющего';ref['J52']='Записка второго проверяющего';w.save(target)
+    for _ in range(2):
+        run(target,[source]);ref=load_workbook(target,data_only=True)['Справка по томам']
+        assert ref['A42'].value=='Зинзюк Евгений Анатольевич' and ref['A52'].value=='Новиков Олег Иванович'
+        assert ref['A54'].value=='ИТОГО проверено коробов' and ref['A55'].value=='ИТОГО проверено томов'
+        assert ref['J42'].value=='Записка первого проверяющего' and ref['J52'].value=='Записка второго проверяющего'
+        start=ref.cell(1,h+3).value
+        assert [ref.cell(start+i,5).value for i in range(2)]==[111,222],'Manual volume counts must move with the actual box table'
+
+def test_legacy_merges_do_not_hide_values():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir()
+    source=book(temp/'merge-layout.xlsx',[{3:'Том 1',9:'Анна',10:datetime(2026,10,2),12:1}],['Анна'])
+    w=load_workbook(source);ref=w['Справка по томам'];ref['B8']=datetime(2026,10,2);ref['G9']='ИТОГО';ref['H9']='Примечание'
+    ref['H12']='Верхняя записка';ref['H13']='Нижняя записка';ref['N1']='Заголовок пользователя'
+    for address in ['B12:B13','A42:A43','I44:K44','N1:Q1']:ref.merge_cells(address)
+    w.save(source);output=temp/'result.xlsx';run(output,[source])
+    ref=load_workbook(output,data_only=True)['Справка по томам']
+    assert ref['B12'].value=='1пд' and ref['B13'].value==1 and ref['I13'].value==1
+    assert ref['A42'].value=='ИТОГО проверено коробов' and ref['A43'].value=='ИТОГО проверено томов'
+    assert ref['J12'].value=='Верхняя записка' and ref['J13'].value=='Нижняя записка','Both note rows remain visible'
+    assert 'N1:Q1' in {str(m) for m in ref.merged_cells.ranges} and ref['N1'].value=='Заголовок пользователя'
+    for merged in ref.merged_cells.ranges:
+        for row in ref.iter_rows(min_row=merged.min_row,max_row=merged.max_row,min_col=merged.min_col,max_col=merged.max_col):
+            for cell in row:
+                if (cell.row,cell.column)!=(merged.min_row,merged.min_col):assert cell.value is None
+    # Inspect the XML too: spreadsheet readers hide non-anchor values in merged cells.
+    with zipfile.ZipFile(output) as z:
+        member=next(n for n in z.namelist() if n.startswith('xl/worksheets/sheet') and 'УЧЁТ ПРОВЕРЕННЫХ КОРОБОВ'.encode() in z.read(n))
+        raw=cells(z,member)
+    from openpyxl.utils.cell import range_boundaries,get_column_letter
+    for merged in ref.merged_cells.ranges:
+        left,top,right,bottom=range_boundaries(str(merged))
+        for row in range(top,bottom+1):
+            for col in range(left,right+1):
+                if (row,col)!=(top,left):assert raw.get(f'{get_column_letter(col)}{row}',('',None)) in [('',None)],str(merged)
+
 test_merge()
 test_existing_target()
 test_user_columns()
@@ -411,5 +455,7 @@ test_kind_table_and_notes()
 test_long_calendar_filter_duplicates()
 test_changed_dates_and_new_people()
 test_names_suffixed_iul_inserted_rows()
+test_inserted_rows_keep_notes_and_box_counts()
+test_legacy_merges_do_not_hide_values()
 print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks, wide days, live dates, new reviewers, names, suffixed IUL and inserted rows')
 
