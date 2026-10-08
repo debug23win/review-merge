@@ -32,7 +32,7 @@ namespace ReviewMerge {
         // Same person written identically apart from case, spaces after initials and Ё.
         public static string NameKey(string name) { return Regex.Replace(CleanName(name), @"\.\s+", ".").ToUpperInvariant().Replace('Ё', 'Е'); }
 
-        // Boxes: 45; "45 и 46"; "45,46"; "45-48" (consecutive boxes 45..48).
+        // Boxes: 45; "45 и 46"; "45,46"; "45-48" (consecutive boxes 45..48). Words and signs are ignored: "№2", "короб2", "к. №2" are box 2.
         public static List<int> ParseBoxes(object value, out bool valid) {
             var result = new List<int>(); valid = true;
             if (value == null) return result;
@@ -43,9 +43,10 @@ namespace ReviewMerge {
             }
             string s = Text(value);
             if (s == "") return result;
+            s = Regex.Replace(s, @"(\d)[.,]0+(?!\d)", "$1");
             s = Regex.Replace(s, @"\s*[-–—]\s*", "-");
-            s = Regex.Replace(s, @"\s+и\s+|[;+]", ",", RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, @"\s*,\s*|\s+", ",");
+            s = Regex.Replace(s, @"[^\d-]+", ",");
+            s = Regex.Replace(s, @"(?<!\d)-|-(?!\d)", ",");
             foreach (string part in s.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)) {
                 var m = Regex.Match(part, @"^(\d{1,6})(?:-(\d{1,6}))?$");
                 if (!m.Success) { valid = false; return new List<int>(); }
@@ -67,7 +68,7 @@ namespace ReviewMerge {
         public static string BoxListDisplay(string list) { return string.Join(", ", (list ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(BoxDisplay)); }
         public static bool PlainBoxNumber(object box) { bool valid; var list = ParseBoxes(box, out valid); return valid && list.Count == 1 && Regex.IsMatch(Text(box), @"^\d+(?:\.0+)?$"); }
 
-        // Volume: fragments ("Фрагмент 2", "_фрагмент1"), changes ("_изм.1") and the ИУЛ ending ("-УЛ", "-ИУЛ") belong to one volume.
+        // Volume: fragments and parts ("Фрагмент 2", "_фрагмент1", "_Часть1", "(Часть 6.2)"), changes ("_изм.1") and the ИУЛ ending ("-УЛ", "-ИУЛ") belong to one volume.
         static string FileStem(object file, object ext) {
             string name = XlsxReader.Normal(file), e = XlsxReader.Normal(ext).TrimStart('.');
             if (e != "" && name.EndsWith("." + e, StringComparison.Ordinal)) name = name.Substring(0, name.Length - e.Length - 1);
@@ -76,7 +77,7 @@ namespace ReviewMerge {
         public static string VolumeKey(object file, object ext) {
             string name = FileStem(file, ext);
             for (int i = 0; i < 2; i++) {
-                name = Regex.Replace(name, @"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])ФРАГМЕНТ\s*(?:№|N)?\s*\d+(?:\s*ИЗ\s*\d+)?[\)\]]*", "");
+                name = Regex.Replace(name, @"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])(?:ФРАГМЕНТ|ЧАСТЬ)\s*(?:№|N)?\s*\d+(?:\.\d+)*(?:\s*ИЗ\s*\d+)?[\)\]]*", "");
                 name = Regex.Replace(name, @"[\(\[ _,\-]+ИЗМ[.\s]*\d+[\)\]]*$", "");
                 name = Regex.Replace(name, @"[-_ ]+[\(\[]?И?УЛ[\)\]]?$", "");
             }

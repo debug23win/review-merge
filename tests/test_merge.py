@@ -131,8 +131,8 @@ def test_template_and_fragments():
     matching=[r for r in range(7,p.max_row+1) if p.cell(r,vh).value=='ЛЮБОЙ ШИФР A/7']
     assert len(matching)==1,matching
     vc=p.cell(matching[0],vh+3);assert vc.value.startswith('=MAX(')
-    cached=load_workbook(output,data_only=True)['Справка по томам'];assert cached.cell(matching[0],vh+9).value==2
-    assert cached.cell(matching[0],vh+10).value==2
+    cached=load_workbook(output,data_only=True)['Справка по томам'];assert cached.cell(matching[0],vh+9).value==1,'A filled S field is one remark per volume'
+    assert cached.cell(matching[0],vh+10).value==1
     before_notes=m['T7'].value,m['T8'].value;run(output,[source]);s2=load_workbook(output)['Свод'];m2=load_workbook(output)['Все загруженные файлы']
     assert before_notes==(m2['T7'].value,m2['T8'].value)
     assert 'Справка по томам' in s2['B10'].value
@@ -235,14 +235,14 @@ def test_box_lists_and_dates_with_year():
     temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'boxes.xlsx'
     book(source,[{3:'Том 1',9:'Анна',10:'02.10.2026 г.',12:'45 и 46'},{3:'Том 2',9:'Анна',10:datetime(2026,10,2),12:'47,48'},
                  {3:'Том 3',9:'Анна',10:datetime(2026,10,2),12:'50-52'},{3:'Том 4',9:'Анна',10:datetime(2026,10,2),12:3},
-                 {3:'Том 5',12:'60 и 61'},{3:'Том 6',9:'Анна',10:datetime(2026,10,2),12:'короб 7'}])
+                 {3:'Том 5',12:'60 и 61'},{3:'Том 6',9:'Анна',10:datetime(2026,10,2),12:'к. №7'},{3:'Том 7',9:'Анна',10:datetime(2026,10,2),12:'без номера'}])
     output=temp/'result.xlsx';report=run(output,[source])
-    assert report['Boxes']==8 and report['Problems']==1,report
+    assert report['Boxes']==9 and report['Problems']==1,report
     cached=load_workbook(output,data_only=True);main=cached[MAIN];ref=cached['Справка по томам']
     assert main['J7'].value==datetime(2026,10,2) and load_workbook(output)[MAIN]['J7'].number_format=='dd.mm.yyyy'
     marker=next(c for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3');start=ref.cell(1,marker.column+3).value;end=ref.cell(1,marker.column+4).value
     boxes=[ref.cell(r,2).value for r in range(start,end+1)]
-    assert boxes==[3,45,46,47,48,50,51,52,60,61],boxes
+    assert boxes==[3,7,45,46,47,48,50,51,52,60,61],boxes
     dated={ref.cell(r,2).value:ref.cell(r,6).value for r in range(start,end+1)}
     assert dated[45]==dated[46]==datetime(2026,10,2) and dated[60] in (None,'')
     slots=[c.value for row in ref.iter_rows(min_row=12,max_row=12) for c in row if isinstance(c.value,str)]
@@ -321,6 +321,25 @@ def test_long_calendar_filter_duplicates():
     assert m['P7'].value==1 and m['P20'].value==1
     with zipfile.ZipFile(target) as z:assert 'forceFullCalc' not in z.read('xl/workbook.xml').decode()
 
+def test_marks_parts_and_wide_days():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir()
+    documents=[{3:f'Том {n}',9:'Анна',10:datetime(2026,10,2),12:n} for n in range(1,8)]
+    documents+=[{3:'Том Ч_Часть1',9:'Анна',10:datetime(2026,10,3),12:9,14:'да'},{3:'Том Ч (Часть 2)',9:'Анна',10:datetime(2026,10,3),12:9,15:'+'}]
+    source=book(temp/'source.xlsx',documents)
+    target=book(temp/'svod.xlsx',[{3:d[3]} for d in documents],['Анна'])
+    w=load_workbook(target);ref=w['Справка по томам'];ref['B8']=datetime(2026,10,3);ref['G9']='ИТОГО';ref['H12']='Моё примечание';w.save(target)
+    plain=run(temp/'plain.xlsx',[source]);assert plain['Problems']==2 and plain['ConvertedMarks']==[],plain
+    report=run(target,[source],False,'--convert-marks');assert report['Problems']==0 and len(report['ConvertedMarks'])==2,report
+    main=load_workbook(target)[MAIN];assert main['N14'].value==1 and main['O15'].value==1
+    cached=load_workbook(target,data_only=True);ref=cached['Справка по томам']
+    days=[(c.column,c.value) for c in ref[8] if isinstance(c.value,datetime)]
+    assert days[0]==(2,datetime(2026,10,2)) and days[1][1]==datetime(2026,10,3),days
+    slots=[ref.cell(12,c).value for c in range(2,days[1][0])]
+    assert [v for v in slots if isinstance(v,str) and v.endswith('пд')]==[f'{n}пд' for n in range(1,8)],slots
+    assert ref.cell(12,days[1][0]+6).value=='Моё примечание','The note moves together with its day'
+    summary=cached['Свод'];col=summary_column(summary,datetime(2026,10,4))
+    assert summary.cell(38,col).value==8,'«Часть 1» and «Часть 2» are one volume'
+
 test_merge()
 test_existing_target()
 test_user_columns()
@@ -332,6 +351,7 @@ test_box_lists_and_dates_with_year()
 test_surname_matching()
 test_incomplete_boxes_and_standalone_iul()
 test_filled_rows_keep_reviewer_and_box()
+test_marks_parts_and_wide_days()
 test_kind_table_and_notes()
 test_long_calendar_filter_duplicates()
 print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, incomplete volumes and ИУЛ')

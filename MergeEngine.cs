@@ -42,6 +42,8 @@ namespace ReviewMerge {
         public bool CurrentDateForNewReviews, MatchSurnames;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
         public Func<string, string, bool> SamePerson;
+        // A mark other than 1 or 0 in M:R ("да", "+", "х") and the number of cells with it; true turns it into 1.
+        public Func<string, int, bool> ConvertMark;
         // Receives the partly checked boxes and returns those whose remaining rows are filled without remarks.
         public Func<IList<IncompleteBox>, IList<IncompleteBox>> FillIncomplete;
     }
@@ -56,6 +58,7 @@ namespace ReviewMerge {
         public readonly List<IncompleteBox> IncompleteBoxes = new List<IncompleteBox>();
         public readonly List<IncompleteBox> FilledBoxes = new List<IncompleteBox>();
         public readonly List<string> PeopleMerges = new List<string>();
+        public readonly List<string> ConvertedMarks = new List<string>();
         public int StartRow, HeaderRow;
     }
     public static class MergeEngine {
@@ -173,6 +176,7 @@ namespace ReviewMerge {
             bool currentDateForNewReviews = options.CurrentDateForNewReviews;
             var result = new MergeResult { Files = files.Count };
             var byKey = new Dictionary<string, MergedRow>(StringComparer.Ordinal);
+            var marks = new List<KeyValuePair<SourceRow, int>>();
             for (int fi = 0; fi < files.Count; fi++) {
                 Check(token);
                 progress((int)(40.0 * fi / files.Count), "Чтение " + Path.GetFileName(files[fi]));
@@ -204,8 +208,7 @@ namespace ReviewMerge {
                     if (!suppliedDate&&Txt(row.Values[8]) != "" && Txt(row.Values[9]) == "")
                         AddProblem(result, row, "Указан проверяющий, но отсутствует дата проверки.");
                     for (int col = 12; col < 18; col++) {
-                        object f = Flag(row.Values[col]);
-                        if (f is string) AddProblem(result, row, "Недопустимая отметка в " + ExcelColumn(col + 1) + ": «" + Txt(f) + "». Допустимы 1, 0 или пусто.");
+                        if (Flag(row.Values[col]) is string) marks.Add(new KeyValuePair<SourceRow, int>(row, col));
                     }
                     string kind = XlsxReader.Normal(row.Values[10]);
                     if (kind != "" && kind != "ИИ" && kind != "ПД" && kind != "ДПТ") AddProblem(result, row, "Неизвестный вид документации: «" + Txt(row.Values[10]) + "».");
@@ -213,6 +216,17 @@ namespace ReviewMerge {
                     if (!validBox) AddProblem(result, row, "Номер короба не распознан: «" + Txt(row.Values[11]) + "». Укажите целое число; несколько коробов — через запятую или «и», короба подряд — через дефис (45-48).");
                 }
                 progress((int)(40.0 * (fi + 1) / files.Count), "Прочитано: " + source.Rows.Count + " документов, " + source.Orphans.Count + " строк без документа");
+            }
+            // Marks such as "да", "+" or "х" become 1 only when the operator agrees; otherwise they stay as written and are reported.
+            foreach (var g in marks.GroupBy(m => XlsxReader.Normal(m.Key.Values[m.Value]))) {
+                var cells = g.ToList(); string shown = Txt(cells[0].Key.Values[cells[0].Value]);
+                bool toOne = options.ConvertMark != null && options.ConvertMark(shown, cells.Count);
+                foreach (var m in cells) {
+                    if (!toOne) { AddProblem(result, m.Key, "Недопустимая отметка в " + ExcelColumn(m.Value + 1) + ": «" + Txt(m.Key.Values[m.Value]) + "». Допустимы 1, 0 или пусто."); continue; }
+                    if (m.Key.Written == null) m.Key.Written = (object[])m.Key.Values.Clone();
+                    m.Key.Values[m.Value] = 1.0;
+                }
+                if (toOne) result.ConvertedMarks.Add("«" + shown + "» → 1 (ячеек: " + cells.Count + ")");
             }
             foreach (var merged in result.Rows) {
                 Check(token);

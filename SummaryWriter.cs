@@ -63,13 +63,6 @@ namespace ReviewMerge {
             string template=";"+string.Join(";",keys.Select(k=>"@"+k.Substring(k.IndexOf('|'))))+";";
             return "IF(TRIM("+box+")="+Literal(Regex.Replace(Text(value)," +"," "))+",SUBSTITUTE("+Literal(template)+",\"@\","+kindExpr+"),"+single+")";
         }
-        // The same remark text in several parts of one volume is counted once, in its first record.
-        static string UniqueRemarkFormula(int h,int t,int rn,List<int> before,string countRef,string clean) {
-            if(before.Count==0)return countRef;
-            string cleanCol=MergeEngine.ExcelColumn(h+25+t);
-            if(before.Count<=200)return "IF("+countRef+"=0,0,IF(OR("+string.Join(",",before.Select(j=>clean+"="+cleanCol+(j+7)))+"),0,"+countRef+"))";
-            return "IF("+countRef+"=0,0,IF(SUMPRODUCT(("+LocalRange(h+28,7,rn)+"="+MergeEngine.ExcelColumn(h+28)+rn+")*("+LocalRange(h+25+t,7,rn)+"="+clean+"))=1,"+countRef+",0))";
-        }
         static void MergeTitle(XDocument doc,int row,int end) {
             var merges=doc.Root.Element(N+"mergeCells");if(merges==null){merges=new XElement(N+"mergeCells");doc.Root.Element(N+"sheetData").AddAfterSelf(merges);}
             merges.Elements().Where(e=>((string)e.Attribute("ref")??"").StartsWith("A"+row+":",StringComparison.Ordinal)).Remove();
@@ -89,7 +82,7 @@ namespace ReviewMerge {
             int templateEnd=previous==null?0:previous.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c").Where(c=>c.Element(N+"v")!=null||c.Element(N+"f")!=null||c.Element(N+"is")!=null)
                 .Select(c=>Column((string)c.Attribute("r"))).Where(c=>oldHelper==0||c<oldHelper).DefaultIfEmpty(0).Max();
             // Calculation columns start to the right of every date column and every filled cell of the summary.
-            referenceLayout=PrepareReference(result,dates,asOf,Math.Max(end,templateEnd)+3);
+            referenceLayout=PrepareReference(result,dates,issues,asOf,Math.Max(end,templateEnd)+3);
             int h=referenceLayout.Helper,last=result.Rows.Count+6,vh=h+12;
             var g=new Grid();var defaults=SummaryStyles();
             int label=reference?StyleAt(previous,7,1,defaults[0]):defaults[0],number=reference?StyleAt(previous,7,2,defaults[1]):defaults[1];
@@ -109,12 +102,8 @@ namespace ReviewMerge {
             g.Set(1,h,CalculationMarker,bodyStyle);g.Set(1,h+1,asOf.ToOADate(),dateStyle);
             string[] helperNames={"Ключ короба","Проверяющий для статистики","Считается томом","Файл проверен","Дата для статистики","Есть замечания","Первая дата из источников","Ключ исходной записи","Вид документации","Проверяющий","Строка основного листа","Имя файла"};
             for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);
-            // List item markers; RemarkCounter replaces the digits of an item number by # before counting.
-            string[] tokens={"\n#. ","\n#) ","\n- ","\n* ","\n• ","\n● ","\n▪ "};
-            for(int n=0;n<tokens.Length;n++)g.Set(n+1,h+27,tokens[n],bodyStyle);
-            string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h),tokenRange=LocalRange(h+27,1,tokens.Length);
-            var volumeKeys=result.Rows.Select(VolumeKey).ToList();var earlier=new Dictionary<string,List<int>>(StringComparer.Ordinal);
-            var seenRemarks=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h);
+            var volumeKeys=result.Rows.Select(VolumeKey).ToList();
             for(int i=0;i<result.Rows.Count;i++) {
                 int rn=i+7,mr=rowNumbers[i];var row=result.Rows[i];string x=MergeEngine.ExcelColumn(h+3)+rn,prior=MergeEngine.ExcelColumn(h+6)+rn,rawRef=MergeEngine.ExcelColumn(h+9)+rn;
                 string kind=MainCell(name,"K",mr),box=MainCell(name,"L",mr),who=MainCell(name,"I",mr),file=MainCell(name,"C",mr),date=MainCell(name,"J",mr);
@@ -125,41 +114,31 @@ namespace ReviewMerge {
                 g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+MainCell(name,"M",mr)+":R"+mr+",1)>0,COUNTIF("+MainCell(name,"M",mr)+":R"+mr+",\"?*\")>0,"+MainCell(name,"S",mr)+"<>\"\","+MainCell(name,"T",mr)+"<>\"\"),1,0)");
                 g.Set(rn,h+6,row.FirstReviewDate.HasValue?(object)row.FirstReviewDate.Value:null,dateStyle);
                 g.Set(rn,h+7,Convert.ToBase64String(Encoding.UTF8.GetBytes(XlsxReader.Key(new SourceRow{Values=row.Values}))),bodyStyle);
-                string volumeKey=volumeKeys[i];g.Set(rn,h+28,volumeKey,bodyStyle);
-                List<int> before;if(!earlier.TryGetValue(volumeKey,out before)){before=new List<int>();earlier[volumeKey]=before;}
-                for(int t=0;t<2;t++) {
-                    string source=MainCell(name,t==0?"S":"T",mr),clean=MergeEngine.ExcelColumn(h+25+t)+rn,countRef=MergeEngine.ExcelColumn(h+23+t)+rn,text=RemarkCounter.Normalize(Text(row.Values[18+t]));int count=RemarkCounter.Count(text);
-                    g.Set(rn,h+25+t,text,bodyStyle,RemarkCounter.NormalizeFormula(source));g.Set(rn,h+23+t,count,intStyle,RemarkCounter.Formula(source,clean,tokenRange));
-                    int unique=seenRemarks.Add(volumeKey+"\u001f"+t+"\u001f"+text)?count:0;
-                    g.Set(rn,h+29+t,unique,intStyle,UniqueRemarkFormula(h,t,rn,before,countRef,clean));
-                }
-                before.Add(i);
+                g.Set(rn,h+28,volumeKeys[i],bodyStyle);
+                // A filled S or T field is one remark, however many items its text has.
+                for(int t=0;t<2;t++){string source=MainCell(name,t==0?"S":"T",mr);g.Set(rn,h+23+t,Text(row.Values[18+t])!=""?1:0,intStyle,"IF(LEN(TRIM("+source+"))>0,1,0)");}
                 for(int t=0;t<6;t++)g.Set(rn,h+31+t,Text(row.Values[12+t])=="1"?1:0,intStyle,"IF(COUNTIF("+MainCell(name,MergeEngine.ExcelColumn(13+t),mr)+",1)>0,1,0)");
                 g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+kind+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,"IF(TRIM("+who+")=\"\",\"\",TRIM("+who+"))");g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
             }
-            var volumes=result.Rows.Select((r,i)=>new{Key=volumeKeys[i],Index=i}).GroupBy(x=>x.Key,StringComparer.Ordinal).ToList();
+            var volumes=referenceLayout.VolumeGroups;
             var volumeDates=new List<double?>();var volumeIssues=new List<int>();var counted=new List<bool>();var typeCounts=new List<int[]>();
             g.Set(6,vh,"Том (фрагменты и ИУЛ объединены)",bodyStyle);g.Set(6,vh+1,"Первая проверка тома",bodyStyle);g.Set(6,vh+2,"Есть замечания в томе",bodyStyle);
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Текстовые дополнительные замечания"};
             for(int t=0;t<8;t++)g.Set(6,vh+3+t,typeNames[t],bodyStyle);
             for(int j=0;j<volumes.Count;j++) {
-                int rn=j+7;var indices=volumes[j].Select(v=>v.Index).ToList();var vd=indices.Where(i=>dates[i].HasValue).Select(i=>dates[i].Value).ToList();double? d=vd.Count==indices.Count?(double?)vd.Max():null;int issue=indices.Any(i=>issues[i]==1)?1:0;
                 // A group made only of ИУЛ is not a volume: its files and remarks are counted, the volume is not.
-                bool isVolume=indices.Any(i=>!Rules.IsUl(result.Rows[i].Values[2],result.Rows[i].Values[3]));
+                int rn=j+7;var indices=volumes[j];var record=referenceLayout.Volumes[j];double? d=record.Date;int issue=record.Issue;bool isVolume=record.IsVolume;
                 volumeDates.Add(d);volumeIssues.Add(issue);counted.Add(isVolume);var counts=new int[8];typeCounts.Add(counts);
                 string dateCells=GroupCells(h+4,indices),issueCells=GroupCells(h+5,indices);
-                g.Set(rn,vh,volumes[j].Key,bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF(COUNT("+dateCells+")="+indices.Count+",MAX("+dateCells+"),\"\")");g.Set(rn,vh+2,issue,intStyle,"MAX("+issueCells+")");g.Set(rn,h+2,isVolume?1:0,intStyle);
+                g.Set(rn,vh,volumeKeys[indices[0]],bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF(COUNT("+dateCells+")="+indices.Count+",MAX("+dateCells+"),\"\")");g.Set(rn,vh+2,issue,intStyle,"MAX("+issueCells+")");g.Set(rn,h+2,isVolume?1:0,intStyle);
+                // Every type counts once per volume: a mark M:R or a filled field S:T in any of its parts.
                 for(int t=0;t<8;t++) {
                     int col=t<6?12+t:18+t-6;counts[t]=indices.Any(i=>t<6?Text(result.Rows[i].Values[col])=="1":Text(result.Rows[i].Values[col])!="")?1:0;
-                    string f="MAX("+GroupCells(h+31+t,indices)+")";
-                    if(t>=6) {
-                        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);counts[t]=indices.Select(i=>RemarkCounter.Normalize(Text(result.Rows[i].Values[col]))).Where(v=>seen.Add(v)).Sum(v=>RemarkCounter.Count(v));
-                        f="SUM("+GroupCells(h+29+t-6,indices)+")";
-                    }
-                    if(f.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumes[j].Key);
+                    string f="MAX("+GroupCells(t<6?h+31+t:h+23+t-6,indices)+")";
+                    if(f.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumeKeys[indices[0]]);
                     g.Set(rn,vh+3+t,counts[t],intStyle,f);
                 }
-                ReferenceVolume(g,h,rn,indices,result,keys,dates,issue,isVolume);
+                ReferenceVolume(g,h,rn,j,indices);
             }
             int vlast=volumes.Count+6;
             string xr=LocalRange(h+3,7,last),zr=LocalRange(h+5,7,last),cr=LocalRange(h+11,7,last),vdr=LocalRange(vh+1,7,vlast),vir=LocalRange(vh+2,7,vlast),isv=","+LocalRange(h+2,7,vlast)+",1";
@@ -167,7 +146,7 @@ namespace ReviewMerge {
             g.Set(21,1,"Показатель",greenLabel);g.Set(22,1,"Файлов в реестре",label);g.Set(23,1,"Проверено файлов нарастающим итогом",greenLabel);g.Set(24,1,"Проверено томов (фрагменты и ИУЛ объединены)",greenLabel);g.Set(25,1,"Проверенных файлов с замечаниями",label);g.Set(26,1,"Проверенных томов с замечаниями",label);g.Set(27,1,"Впервые проверено файлов за сутки",label);g.Set(28,1,"Впервые проверено томов за сутки",label);
             g.Set(30,1,"КОЛИЧЕСТВО ЗАМЕЧАНИЙ ПО ТИПАМ",defaults[8]);g.Heights[30]=24;g.Set(31,1,"Тип замечания",greenLabel);
             for(int t=0;t<8;t++)g.Set(32+t,1,typeNames[t],label);g.Set(40,1,"Всего отметок и текстовых замечаний",greenLabel);g.Set(41,1,"Томов с любыми замечаниями",orangeLabel);
-            g.Set(42,1,"Отметки M:R считаются по томам. В S:T считаются пункты списка или отдельные абзацы; одинаковый текст в нескольких частях тома учитывается один раз. ИУЛ без основного файла томом не считается.",noteStyle);g.Heights[42]=32;
+            g.Set(42,1,"Замечания считаются по томам: отметка M:R или заполненное поле S:T в любой части тома — одно замечание этого типа. ИУЛ без основного файла томом не считается.",noteStyle);g.Heights[42]=32;
             for(int i=0;i<calendar.Count;i++) {
                 int c=i+2;double serial=calendar[i];string cs=MergeEngine.ExcelColumn(c),d=cs+"$5",criteria=",\">0\","+yr+",\"<=\"&"+d,vc=",\">0\","+vdr+",\"<=\"&"+d;bool future=serial>asOf.ToOADate();
                 g.Set(21,c,serial,StyleAt(previous,5,c,defaults[6]));g.Set(31,c,serial,StyleAt(previous,5,c,defaults[6]));
@@ -176,7 +155,7 @@ namespace ReviewMerge {
                 string guard="IF("+d+">$"+MergeEngine.ExcelColumn(h+1)+"$1,\"\",";
                 Action<int,int,string,int> set=(r,value,formula,style)=>g.Set(r,c,future?(object)"":value,style,guard+formula+")");
                 set(22,result.Documents,"COUNTA("+cr+")",number);set(23,reviewed,"COUNTIFS("+xr+",1,"+yr+criteria+")",greenNumber);set(24,vcount,"COUNTIFS("+vdr+vc+isv+")",greenNumber);set(25,fileIssue,"COUNTIFS("+xr+",1,"+yr+criteria+","+zr+",1)",number);set(26,volIssue,"COUNTIFS("+vdr+vc+","+vir+",1"+isv+")",number);set(27,dates.Count(v=>v==serial),"COUNTIFS("+xr+",1,"+yr+","+d+")",number);set(28,Enumerable.Range(0,volumes.Count).Count(j=>counted[j]&&volumeDates[j]==serial),"COUNTIFS("+vdr+","+d+isv+")",number);
-                int total=0;for(int t=0;t<8;t++) {int count=volumeDates.Select((v,j)=>new{v,j}).Where(v=>v.v.HasValue&&v.v.Value<=serial).Sum(v=>typeCounts[v.j][t]);total+=count;string range=LocalRange(vh+3+t,7,vlast);set(32+t,count,t<6?"COUNTIFS("+vdr+vc+","+range+",1)":"SUMIFS("+range+","+vdr+vc+")",number);}
+                int total=0;for(int t=0;t<8;t++) {int count=volumeDates.Select((v,j)=>new{v,j}).Where(v=>v.v.HasValue&&v.v.Value<=serial).Sum(v=>typeCounts[v.j][t]);total+=count;string range=LocalRange(vh+3+t,7,vlast);set(32+t,count,"COUNTIFS("+vdr+vc+","+range+",1)",number);}
                 set(40,total,"SUM("+cs+"32:"+cs+"39)",greenNumber);set(41,volIssue,cs+"26",orangeNumber);
             }
             g.Set(44,1,"Вид документации",greenLabel);g.Set(44,2,"Файлов в реестре",greenLabel);g.Set(44,3,"Проверено файлов",greenLabel);g.Set(44,4,"С замечаниями",greenLabel);g.Heights[44]=36;
@@ -232,7 +211,7 @@ namespace ReviewMerge {
         void WritePhysicalTotals(Grid g,XDocument previous,bool reference,List<double> calendar,DateTime asOf,int[] defaults,int label,int number,int greenLabel,int greenNumber,int orangeLabel,int orangeNumber,string cr,string xr,string yr,MergeResult result,List<double?> dates) {
             string physicalPath=PathFor("Справка по томам");var physical=physicalPath==null?null:Xml(physicalPath);bool usePhysical=physical!=null&&XlsxReader.Normal(Value(At(physical,1,1))).Contains("КОРОБ");
             if(!reference) {string[] labels=usePhysical?new[]{"Получено коробов","Кол-во томов по акту","Проверено коробов нарастающим итогом","Проверено томов нарастающим итогом","Осталось проверить коробов","Осталось проверить томов","Дельта за сутки проверенных коробов","Дельта за сутки проверенных томов"}:new[]{"Коробов указано в реестре","Файлов в реестре","Коробов с проверенными файлами","Проверено файлов нарастающим итогом","Коробов без проверенных файлов","Осталось проверить файлов","Впервые отмечено коробов за сутки","Впервые проверено файлов за сутки"};for(int r=7;r<=14;r++){g.Set(r,1,labels[r-7],r==9||r==10?greenLabel:r==11||r==12?orangeLabel:label);g.Heights[r]=32;}}
-            var daily=new List<KeyValuePair<double,int>>();if(usePhysical)foreach(var c in physical.Root.Element(N+"sheetData").Elements(N+"row").Where(e=>(int)e.Attribute("r")==8).Elements(N+"c")) {double? d=XlsxReader.DateSerial(Value(c));if(d.HasValue)daily.Add(new KeyValuePair<double,int>(d.Value,Column((string)c.Attribute("r"))+5));}
+            var daily=usePhysical?referenceLayout.Blocks.Select(b=>new KeyValuePair<double,int>(b.Date,b.Total)).ToList():new List<KeyValuePair<double,int>>();
             var l=referenceLayout;string boxDates="'Справка по томам'!"+LocalRange(6,l.ManifestStart,l.ManifestEnd),boxNumbers="'Справка по томам'!"+LocalRange(2,l.ManifestStart,l.ManifestEnd);
             var previousSums=new double[2];
             for(int i=0;i<calendar.Count;i++) {

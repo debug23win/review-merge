@@ -14,6 +14,8 @@ namespace ReviewMerge {
         public int Row;
         public string File;
         public object[] Values = new object[20];
+        // Values as they are in the file when Values were interpreted (a mark "да" read as 1).
+        public object[] Written;
         public object FirstDateSource;
         public double? PriorFirstDate;
         public bool IsConsolidated;

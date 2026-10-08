@@ -18,16 +18,17 @@ namespace ReviewMerge {
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
                 if (args.Length > 0 && args[0] == "--batch") {
                     // Options of the batch mode answer every question with "yes": --match-surnames merges people with one surname, --fill-incomplete fills the remaining rows of partly checked boxes.
-                    string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete"};
+                    string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks"};
                     var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1])};
                     if(args.Contains(switches[2]))options.FillIncomplete=list=>list;
+                    if(args.Contains(switches[3]))options.ConvertMark=(mark,count)=>true;
                     args=args.Where(a=>!switches.Contains(a)).ToArray();
-                    if (args.Length < 5) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--current-date-for-new] [--match-surnames] [--fill-incomplete]");
+                    if (args.Length < 5) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--current-date-for-new] [--match-surnames] [--fill-incomplete] [--convert-marks]");
                     DateTime date = DateTime.ParseExact(args[2], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
                     var logs = new List<string>();
                     var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
                     var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.DatesAssignedToday, result.FilledRows, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count,
-                        IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.Output, Log=logs };
+                        IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.Output, Log=logs };
                     File.WriteAllText(args[1]+".run.json", new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
                     return 0;
                 }
@@ -96,7 +97,7 @@ namespace ReviewMerge {
             var settings=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=2,Margin=new Padding(0)};settings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             currentDate.Text="Ставить текущую дату новым проверенным томам";currentDate.AutoSize=true;currentDate.Anchor=AnchorStyles.Left;currentDate.Checked=UserSettings.GetFlag("CurrentDateForNewReviews",false);currentDate.CheckedChanged+=(s,e)=>{SaveFlag("CurrentDateForNewReviews",currentDate.Checked);UpdateRule();};settings.Controls.Add(currentDate,0,0);
             matchSurnames.Text="Сопоставлять проверяющих по фамилии (спрашивать при каждом совпадении)";matchSurnames.AutoSize=true;matchSurnames.Anchor=AnchorStyles.Left;matchSurnames.Checked=UserSettings.GetFlag("MatchSurnames",true);matchSurnames.CheckedChanged+=(s,e)=>SaveFlag("MatchSurnames",matchSurnames.Checked);settings.Controls.Add(matchSurnames,0,1);
-            forgetNames.AutoSize=true;forgetNames.Anchor=AnchorStyles.Left;forgetNames.Margin=new Padding(18,3,0,0);forgetNames.LinkClicked+=(s,e)=>{if(MessageBox.Show(this,"Забыть сохранённые ответы о совпадающих фамилиях? При следующей сборке программа спросит снова.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;try{UserSettings.ForgetSamePerson();}catch(Exception ex){Append("Не удалось сбросить ответы: "+ex.Message);}RefreshForget();};settings.Controls.Add(forgetNames,1,1);RefreshForget();
+            forgetNames.AutoSize=true;forgetNames.Anchor=AnchorStyles.Left;forgetNames.Margin=new Padding(18,3,0,0);forgetNames.LinkClicked+=(s,e)=>{if(MessageBox.Show(this,"Забыть сохранённые ответы о совпадающих фамилиях и отметках «да», «+», «х»? При следующей сборке программа спросит снова.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;try{UserSettings.ForgetAnswers();}catch(Exception ex){Append("Не удалось сбросить ответы: "+ex.Message);}RefreshForget();};settings.Controls.Add(forgetNames,1,1);RefreshForget();
             content.Controls.Add(settings,0,3);
             rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);UpdateRule();content.Controls.Add(rule,0,4);
             var save=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3};save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));save.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
@@ -155,13 +156,13 @@ namespace ReviewMerge {
             try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
             var selected=paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
-            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,FillIncomplete=AskFillIncomplete};
+            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark};
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append("Начата сборка "+selected.Count+" файлов.");
             var worker=new Thread(()=> {
                 try {
                     var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token,options);
                     Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text="Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Коробов проверено не полностью: "+result.IncompleteBoxes.Count+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
-                        Append("Дополнен сводный документ: "+result.Output);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);
+                        Append("Дополнен сводный документ: "+result.Output);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
                         foreach(var v in result.FilledBoxes)Append("Заполнены без замечаний остальные строки. "+v);foreach(var v in result.IncompleteBoxes)Append("Проверено не полностью, неотмеченные тома не входят в статистику. "+v);
                         foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
                 } catch(OperationCanceledException) {Ui(()=>{Append("Сборка отменена. Итоговый файл не заменён.");Busy(false);cancellation.Dispose();cancellation=null;});}
@@ -169,17 +170,27 @@ namespace ReviewMerge {
             });worker.SetApartmentState(ApartmentState.STA);worker.IsBackground=true;worker.Start();
         }
         void SaveFlag(string name,bool value){try{UserSettings.SetFlag(name,value);}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}}
-        void RefreshForget(){int n=UserSettings.SamePersonCount();forgetNames.Text=n==0?"":"Забыть ответы о фамилиях ("+n+")";forgetNames.Visible=n>0;}
+        void RefreshForget(){int n=UserSettings.AnswerCount();forgetNames.Text=n==0?"":"Забыть сохранённые ответы ("+n+")";forgetNames.Visible=n>0;}
         // Called from the build thread: asks on the window thread and remembers the answer for the next evenings.
         bool AskSamePerson(string raw,string known) {
-            bool? saved=UserSettings.GetSamePerson(raw,known);
+            bool? saved=UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known));
             if(saved.HasValue){Ui(()=>Append("«"+raw+"» и «"+known+"»: "+(saved.Value?"один проверяющий":"разные проверяющие")+" (сохранённый ответ)."));return saved.Value;}
             var answer=DialogResult.None;
             Invoke((Action)(()=>{answer=MessageBox.Show(this,"У проверяющих одна фамилия:\n\n«"+raw+"» — в файле проверяющего\n«"+known+"» — уже в своде\n\nЭто один и тот же человек?\n\nДа — объединить в справке и статистике.\nНет — считать разными людьми.\nОтмена — прервать сборку.\n\nОтвет запомнится для следующих сборок.","Сопоставление по фамилии",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);}));
             if(answer==DialogResult.Cancel)throw new OperationCanceledException();
             bool same=answer==DialogResult.Yes;
-            try{UserSettings.SetSamePerson(raw,known,same);}catch(Exception ex){Ui(()=>Append("Не удалось сохранить ответ: "+ex.Message));}
+            try{UserSettings.SetAnswer("SamePerson",UserSettings.PairKey(raw,known),same);}catch(Exception ex){Ui(()=>Append("Не удалось сохранить ответ: "+ex.Message));}
             Ui(RefreshForget);return same;
+        }
+        bool AskConvertMark(string mark,int count) {
+            string key=XlsxReader.Normal(mark);bool? saved=UserSettings.GetAnswer("Marks",key);
+            if(saved.HasValue){Ui(()=>Append("Отметка «"+mark+"»: "+(saved.Value?"переводится в 1":"остаётся как есть")+" (сохранённый ответ)."));return saved.Value;}
+            var answer=DialogResult.None;
+            Invoke((Action)(()=>{answer=MessageBox.Show(this,"В столбцах отметок M–R встретилось «"+mark+"» (ячеек: "+count+").\n\nПеревести в «1» — считать это несоответствием?\n\nДа — заменить на 1.\nНет — оставить как есть; такая отметка не учитывается в статистике.\nОтмена — прервать сборку.\n\nОтвет запомнится для следующих сборок.","Отметка в столбцах M–R",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);}));
+            if(answer==DialogResult.Cancel)throw new OperationCanceledException();
+            bool convert=answer==DialogResult.Yes;
+            try{UserSettings.SetAnswer("Marks",key,convert);}catch(Exception ex){Ui(()=>Append("Не удалось сохранить ответ: "+ex.Message));}
+            Ui(RefreshForget);return convert;
         }
         IList<IncompleteBox> AskFillIncomplete(IList<IncompleteBox> boxes) {
             IList<IncompleteBox> chosen=new List<IncompleteBox>();bool cancel=false;
@@ -215,11 +226,11 @@ namespace ReviewMerge {
         static void Save(Dictionary<string,object> values){Directory.CreateDirectory(Path.GetDirectoryName(PathName));File.WriteAllText(PathName,new JavaScriptSerializer().Serialize(values),new UTF8Encoding(false));}
         public static bool GetFlag(string name,bool fallback){object value;return Load().TryGetValue(name,out value)&&value is bool?(bool)value:fallback;}
         public static void SetFlag(string name,bool value){var values=Load();values[name]=value;Save(values);}
-        static Dictionary<string,object> Answers(Dictionary<string,object> values){object map;return values.TryGetValue("SamePerson",out map)?map as Dictionary<string,object>??new Dictionary<string,object>():new Dictionary<string,object>();}
-        static string PairKey(string raw,string known){return Rules.NameKey(raw)+" = "+Rules.NameKey(known);}
-        public static bool? GetSamePerson(string raw,string known){object value;return Answers(Load()).TryGetValue(PairKey(raw,known),out value)&&value is bool?(bool?)(bool)value:null;}
-        public static void SetSamePerson(string raw,string known,bool same){var values=Load();var answers=Answers(values);answers[PairKey(raw,known)]=same;values["SamePerson"]=answers;Save(values);}
-        public static int SamePersonCount(){return Answers(Load()).Count;}
-        public static void ForgetSamePerson(){var values=Load();values.Remove("SamePerson");Save(values);}
+        static Dictionary<string,object> Answers(Dictionary<string,object> values,string section){object map;return values.TryGetValue(section,out map)?map as Dictionary<string,object>??new Dictionary<string,object>():new Dictionary<string,object>();}
+        public static string PairKey(string raw,string known){return Rules.NameKey(raw)+" = "+Rules.NameKey(known);}
+        public static bool? GetAnswer(string section,string key){object value;return Answers(Load(),section).TryGetValue(key,out value)&&value is bool?(bool?)(bool)value:null;}
+        public static void SetAnswer(string section,string key,bool answer){var values=Load();var answers=Answers(values,section);answers[key]=answer;values[section]=answers;Save(values);}
+        public static int AnswerCount(){var values=Load();return Answers(values,"SamePerson").Count+Answers(values,"Marks").Count;}
+        public static void ForgetAnswers(){var values=Load();values.Remove("SamePerson");values.Remove("Marks");Save(values);}
     }
 }

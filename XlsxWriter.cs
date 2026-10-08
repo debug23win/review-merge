@@ -160,16 +160,17 @@ namespace ReviewMerge {
             RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags);
             Finish(output,result,asOf,progress,token);
         }
-        void WriteMainRow(XElement xmlrow,int rn,bool keep,MergedRow row,SourceRow previous,Dictionary<int,int> sourceStyles) {
+        void WriteMainRow(XElement xmlrow,int rn,bool keep,MergedRow row,SourceRow source,Dictionary<int,int> sourceStyles) {
+            object[] previous=source==null?null:source.Written??source.Values;
             int noteLines=Math.Max(Text(row.Values[18]).Split('\n').Length,Text(row.Values[19]).Split('\n').Length);
-            bool notesChanged=!keep||previous==null||Text(previous.Values[18])!=Text(row.Values[18])||Text(previous.Values[19])!=Text(row.Values[19]);
+            bool notesChanged=!keep||previous==null||Text(previous[18])!=Text(row.Values[18])||Text(previous[19])!=Text(row.Values[19]);
             if(noteLines>1&&notesChanged){xmlrow.SetAttributeValue("ht",Math.Min(120,Math.Max(30,noteLines*15)));xmlrow.SetAttributeValue("customHeight",1);}
             for(int col=keep?9:1;col<=20;col++){
                 var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);
-                if(col!=10&&keep&&previous!=null&&Text(previous.Values[col-1])==Text(row.Values[col-1]))continue;
+                if(col!=10&&keep&&previous!=null&&Text(previous[col-1])==Text(row.Values[col-1]))continue;
                 int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
                 if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
-                object value=row.Values[col-1];if(col==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous.Values[col-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
+                object value=row.Values[col-1];if(col==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous[col-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
                 SetCell(xmlrow,Cell(rn,col,value,style));
             }
             /* Calculation cells belong on the reference sheet, outside the main register. */
