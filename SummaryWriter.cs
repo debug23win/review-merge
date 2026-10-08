@@ -100,20 +100,23 @@ namespace ReviewMerge {
             }
             if(!reference) {g.Set(1,1,"СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ",defaults[8]);g.Heights[1]=30;g.Set(4,1,"Кол-во дней проверки:",defaults[8]);g.Set(5,1,"По состоянию на:",defaults[8]);}
             g.Set(1,h,CalculationMarker,bodyStyle);g.Set(1,h+1,asOf.ToOADate(),dateStyle);
-            string[] helperNames={"Ключ короба","Проверяющий для статистики","Считается томом","Файл проверен","Дата для статистики","Есть замечания","Первая дата из источников","Ключ исходной записи","Вид документации","Проверяющий","Строка основного листа","Имя файла"};
-            for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);
-            string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h);
+            string[] helperNames={"Ключ короба","Проверяющий для статистики","Считается томом","Файл проверен","Дата для статистики","Есть замечания","Запись дня тома","Новый проверяющий","Вид документации","Проверяющий","Строка основного листа","Имя файла"};
+            for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);g.Set(6,h+25,"Новый короб",bodyStyle);
+            string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h),rawNames=LocalRange(h+9,7,last),boxLists=LocalRange(h,7,last);
+            string knownNames=LocalRange(h+45,7,Math.Max(7,referenceLayout.NameTable.Count+6)),knownBoxes=LocalRange(h+44,referenceLayout.ManifestStart,Math.Max(referenceLayout.ManifestStart,referenceLayout.BoxEnd));
             var volumeKeys=result.Rows.Select(VolumeKey).ToList();
             for(int i=0;i<result.Rows.Count;i++) {
-                int rn=i+7,mr=rowNumbers[i];var row=result.Rows[i];string x=MergeEngine.ExcelColumn(h+3)+rn,prior=MergeEngine.ExcelColumn(h+6)+rn,rawRef=MergeEngine.ExcelColumn(h+9)+rn;
+                int rn=i+7,mr=rowNumbers[i];var row=result.Rows[i];string x=MergeEngine.ExcelColumn(h+3)+rn,rawRef=MergeEngine.ExcelColumn(h+9)+rn;
                 string kind=MainCell(name,"K",mr),box=MainCell(name,"L",mr),who=MainCell(name,"I",mr),file=MainCell(name,"C",mr),date=MainCell(name,"J",mr);
                 g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(kind,box,row.Values[11],keys[i]));
                 g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+nameTable+",3,FALSE),"+rawRef+"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
-                g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),IF(ISNUMBER("+prior+"),MIN(INT("+date+"),"+prior+"),INT("+date+")),\"\")");
+                g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),INT("+date+"),\"\")");
                 g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+MainCell(name,"M",mr)+":R"+mr+",1)>0,COUNTIF("+MainCell(name,"M",mr)+":R"+mr+",\"?*\")>0,"+MainCell(name,"S",mr)+"<>\"\","+MainCell(name,"T",mr)+"<>\"\"),1,0)");
-                g.Set(rn,h+6,row.FirstReviewDate.HasValue?(object)row.FirstReviewDate.Value:null,dateStyle);
-                g.Set(rn,h+7,Convert.ToBase64String(Encoding.UTF8.GetBytes(XlsxReader.Key(new SourceRow{Values=row.Values}))),bodyStyle);
+                // Reviewers and boxes typed in the main sheet after the build: the first row of each that the reference sheet does not list yet.
+                string boxRef=MergeEngine.ExcelColumn(h)+rn;
+                g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+rawRef+")>0,0,IF(MATCH("+rawRef+","+rawNames+",0)="+(i+1)+",1,0)))");
+                g.Set(rn,h+25,0,intStyle,"IF(OR("+boxRef+"=\"\",LEN("+boxRef+")-LEN(SUBSTITUTE("+boxRef+",\";\",\"\"))<>2),0,IF(COUNTIF("+knownBoxes+","+boxRef+")>0,0,IF(MATCH("+boxRef+","+boxLists+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+28,volumeKeys[i],bodyStyle);
                 // A filled S or T field is one remark, however many items its text has.
                 for(int t=0;t<2;t++){string source=MainCell(name,t==0?"S":"T",mr);g.Set(rn,h+23+t,Text(row.Values[18+t])!=""?1:0,intStyle,"IF(LEN(TRIM("+source+"))>0,1,0)");}
@@ -167,7 +170,7 @@ namespace ReviewMerge {
             string[] reviewerHeads={"Фамилия проверяющего","Проверено томов","Томов с замечаниями","Томов за дату свода","Проверено файлов","Файлов без даты","Проверено коробов"};for(int c=0;c<reviewerHeads.Length;c++)g.Set(50,c+1,reviewerHeads[c],greenLabel);g.Heights[50]=48;
             var reviewers=result.Rows.Select(r=>StatKeyOfRaw(r.Values[8])).Where(v=>v!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v,StringComparer.CurrentCulture).ToList();string fileFamily=LocalRange(h+1,7,last),family=LocalRange(h+43,7,vlast);
             WriteReference(g,h,50+reviewers.Count);
-            WritePhysicalTotals(g,previous,reference,calendar,asOf,defaults,label,number,greenLabel,greenNumber,orangeLabel,orangeNumber,cr,xr,yr,result,dates);
+            WritePhysicalTotals(g,previous,reference,calendar,asOf,defaults,label,number,greenLabel,greenNumber,orangeLabel,orangeNumber,cr,xr,yr,vdr,isv,result,dates);
             for(int n=0;n<reviewers.Count;n++) {
                 int r=51+n;string who=reviewers[n];var indices=Enumerable.Range(0,result.Rows.Count).Where(i=>string.Equals(StatKeyOfRaw(result.Rows[i].Values[8]),who,StringComparison.OrdinalIgnoreCase)).ToList();
                 var members=referenceLayout.Volumes.Where(v=>v.IsVolume&&string.Equals(StatKeyOf(v.Who),who,StringComparison.OrdinalIgnoreCase)&&v.Date.HasValue&&v.Date.Value<=asOf.ToOADate()).ToList();
@@ -208,10 +211,9 @@ namespace ReviewMerge {
             var heights=g.Heights.Where(r=>map.ContainsKey(r.Key)).ToList();foreach(var item in heights)g.Heights.Remove(item.Key);foreach(var item in heights)g.Heights[map[item.Key]]=item.Value;
             foreach(var c in g.Rows.Values.SelectMany(r=>r.Values)){var f=c.Element(N+"f");if(f==null)continue;f.Value=Regex.Replace(f.Value,@"(?<sheet>'[^']+'!)?\$?(?<col>[A-Z]{1,3})\$?(?<row>\d+)",m=>{if(m.Groups["sheet"].Success||Column(m.Groups["col"].Value)>Math.Max(7,end))return m.Value;int row=int.Parse(m.Groups["row"].Value);return map.ContainsKey(row)?m.Value.Substring(0,m.Value.Length-m.Groups["row"].Length)+map[row]:m.Value;});}
         }
-        void WritePhysicalTotals(Grid g,XDocument previous,bool reference,List<double> calendar,DateTime asOf,int[] defaults,int label,int number,int greenLabel,int greenNumber,int orangeLabel,int orangeNumber,string cr,string xr,string yr,MergeResult result,List<double?> dates) {
+        void WritePhysicalTotals(Grid g,XDocument previous,bool reference,List<double> calendar,DateTime asOf,int[] defaults,int label,int number,int greenLabel,int greenNumber,int orangeLabel,int orangeNumber,string cr,string xr,string yr,string vdr,string isv,MergeResult result,List<double?> dates) {
             string physicalPath=PathFor("Справка по томам");var physical=physicalPath==null?null:Xml(physicalPath);bool usePhysical=physical!=null&&XlsxReader.Normal(Value(At(physical,1,1))).Contains("КОРОБ");
             if(!reference) {string[] labels=usePhysical?new[]{"Получено коробов","Кол-во томов по акту","Проверено коробов нарастающим итогом","Проверено томов нарастающим итогом","Осталось проверить коробов","Осталось проверить томов","Дельта за сутки проверенных коробов","Дельта за сутки проверенных томов"}:new[]{"Коробов указано в реестре","Файлов в реестре","Коробов с проверенными файлами","Проверено файлов нарастающим итогом","Коробов без проверенных файлов","Осталось проверить файлов","Впервые отмечено коробов за сутки","Впервые проверено файлов за сутки"};for(int r=7;r<=14;r++){g.Set(r,1,labels[r-7],r==9||r==10?greenLabel:r==11||r==12?orangeLabel:label);g.Heights[r]=32;}}
-            var daily=usePhysical?referenceLayout.Blocks.Select(b=>new KeyValuePair<double,int>(b.Date,b.Total)).ToList():new List<KeyValuePair<double,int>>();
             var l=referenceLayout;string boxDates="'Справка по томам'!"+LocalRange(6,l.ManifestStart,l.ManifestEnd),boxNumbers="'Справка по томам'!"+LocalRange(2,l.ManifestStart,l.ManifestEnd);
             var previousSums=new double[2];
             for(int i=0;i<calendar.Count;i++) {
@@ -221,8 +223,9 @@ namespace ReviewMerge {
                     // Cached values let viewers that do not recalculate show the same numbers as Excel.
                     var received=new double[2];for(int r=7;r<=8;r++){object v=Value(At(physical,r-6,2));received[r-7]=v is double?(double)v:0;g.Set(r,c,v is double?v:0.0,number,"'Справка по томам'!B"+(r-6));}
                     if(serial>asOf.ToOADate())continue;
-                    var cols=daily.Where(v=>v.Key<=serial).Select(v=>v.Value).ToList();var sums=new double[2];
-                    for(int r=9;r<=10;r++) {int sourceRow=r==9?42:43;double sum=cols.Select(n=>Value(At(physical,sourceRow,n))).OfType<double>().Sum();sums[r-9]=sum;string f=cols.Count==0?"0":"SUM("+string.Join(",",cols.Select(n=>"'Справка по томам'!"+MergeEngine.ExcelColumn(n)+sourceRow))+")";g.Set(r,c,sum,greenNumber,f);}
+                    // Checked boxes and volumes up to the date, wherever their dates are in the main sheet.
+                    var sums=new double[]{l.Completed.Count(v=>v.Value.HasValue&&v.Value.Value<=serial),l.Volumes.Count(v=>v.IsVolume&&v.Date.HasValue&&v.Date.Value<=serial)};
+                    g.Set(9,c,sums[0],greenNumber,"COUNTIFS("+boxDates+",\">0\","+boxDates+",\"<=\"&"+d+")");g.Set(10,c,sums[1],greenNumber,"COUNTIFS("+vdr+",\">0\","+vdr+",\"<=\"&"+d+isv+")");
                     for(int r=11;r<=14;r++) {
                         string f=r==11?cs+"7-"+cs+"9":r==12?cs+"8-"+cs+"10":r==13?(i==0?cs+"9":cs+"9-"+prev+"9"):(i==0?cs+"10":cs+"10-"+prev+"10");
                         double value=r==11?received[0]-sums[0]:r==12?received[1]-sums[1]:sums[r-13]-(i==0?0:previousSums[r-13]);

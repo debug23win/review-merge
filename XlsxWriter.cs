@@ -141,7 +141,6 @@ namespace ReviewMerge {
             var boxKeys=new List<List<string>>();var dates=new List<double?>();var issues=new List<int>();var checkedFlags=new List<int>();
             foreach(var r in result.Rows){
                 int checked_=Text(r.Values[8])!=""?1:0;double? date=checked_==1?XlsxReader.DateSerial(r.Values[9]):null;
-                if(date.HasValue && r.FirstReviewDate.HasValue)date=Math.Min(date.Value,r.FirstReviewDate.Value);
                 int issue=r.Values.Skip(12).Take(6).Any(v=>Text(v)!="" && Text(v)!="0") || Text(r.Values[18])!="" || Text(r.Values[19])!=""?1:0;
                 boxKeys.Add(Rules.BoxKeys(r.Values[10],r.Values[11]));dates.Add(date);issues.Add(issue);checkedFlags.Add(checked_);
             }

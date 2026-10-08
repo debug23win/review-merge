@@ -29,6 +29,22 @@ namespace ReviewMerge {
             return s;
         }
         public static string SurnameKey(string name) { return Surname(name).ToUpperInvariant().Replace('Ё', 'Е'); }
+        // Letters of the first name and patronymic: "Яковлева Александра Алексеевна", "АА Яковлева" and "Яковлева А.А." give "АА".
+        public static string Initials(string name) {
+            var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)), result = "";
+            foreach (string t in tokens) {
+                if (t == surname) { surname = null; continue; }
+                result += IsInitials(t) ? new string(t.Where(char.IsLetter).ToArray()) : t.Substring(0, 1);
+            }
+            return result.ToUpperInvariant().Replace('Ё', 'Е');
+        }
+        // Words besides the surname: 2 for a full name, 0 for initials or a bare surname.
+        public static int Fullness(string name) { var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)); return tokens.Count(t => !IsInitials(t)) - (surname == null ? 0 : 1); }
+        // One surname and initials that agree with the name, e.g. "АА Яковлева" and "Яковлева Александра Алексеевна".
+        public static bool InitialsAgree(string a, string b) {
+            string x = Initials(a), y = Initials(b);
+            return SurnameKey(a) != "" && SurnameKey(a) == SurnameKey(b) && x != "" && y != "" && (x.StartsWith(y, StringComparison.Ordinal) || y.StartsWith(x, StringComparison.Ordinal));
+        }
         // Same person written identically apart from case, spaces after initials and Ё.
         public static string NameKey(string name) { return Regex.Replace(CleanName(name), @"\.\s+", ".").ToUpperInvariant().Replace('Ё', 'Е'); }
 

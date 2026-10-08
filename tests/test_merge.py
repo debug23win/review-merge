@@ -206,7 +206,7 @@ def test_current_date_for_new_reviews():
     assert all(m.cell(r,20).value=='Исходный текст' for r in range(7,13))
     assert all(m.cell(r,10).number_format=='dd.mm.yyyy' for r in range(7,13))
     ref=w['Справка по томам'];h=next(c.column for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3')
-    assert ref.cell(8,h+6).value==today,'Source historical date leaked into first-review statistics'
+    assert ref.cell(8,h+4).value==today,'Source historical date leaked into review statistics'
     before=[m.cell(r,10).value for r in range(7,13)];repeat=run(target,[source],True)
     after=load_workbook(target,data_only=True)['Все загруженные файлы'];assert repeat['DatesAssignedToday']==0
     assert before==[after.cell(r,10).value for r in range(7,13)],'Repeated import changed saved dates'
@@ -232,7 +232,7 @@ def summary_column(sheet, day, header_row=35):
     return next(c.column for c in sheet[header_row] if c.value==day)
 
 def test_box_lists_and_dates_with_year():
-    temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'boxes.xlsx'
+    temp=run_root/uuid.uuid4().hex;temp.mkdir();source=temp/'box-lists.xlsx'
     book(source,[{3:'Том 1',9:'Анна',10:'02.10.2026 г.',12:'45 и 46'},{3:'Том 2',9:'Анна',10:datetime(2026,10,2),12:'47,48'},
                  {3:'Том 3',9:'Анна',10:datetime(2026,10,2),12:'50-52'},{3:'Том 4',9:'Анна',10:datetime(2026,10,2),12:3},
                  {3:'Том 5',12:'60 и 61'},{3:'Том 6',9:'Анна',10:datetime(2026,10,2),12:'к. №7'},{3:'Том 7',9:'Анна',10:datetime(2026,10,2),12:'без номера'}])
@@ -242,7 +242,7 @@ def test_box_lists_and_dates_with_year():
     assert main['J7'].value==datetime(2026,10,2) and load_workbook(output)[MAIN]['J7'].number_format=='dd.mm.yyyy'
     marker=next(c for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3');start=ref.cell(1,marker.column+3).value;end=ref.cell(1,marker.column+4).value
     boxes=[ref.cell(r,2).value for r in range(start,end+1)]
-    assert boxes==[3,7,45,46,47,48,50,51,52,60,61],boxes
+    assert boxes[:11]==[3,7,45,46,47,48,50,51,52,60,61] and boxes[11:]==[None]*3,boxes
     dated={ref.cell(r,2).value:ref.cell(r,6).value for r in range(start,end+1)}
     assert dated[45]==dated[46]==datetime(2026,10,2) and dated[60] in (None,'')
     slots=[c.value for row in ref.iter_rows(min_row=12,max_row=12) for c in row if isinstance(c.value,str)]
@@ -262,7 +262,7 @@ def test_surname_matching():
         assert (expected in rows)==(expected is not None),rows
         labels={summary.cell(r,1).value:summary.cell(r,5).value for r in range(51,54)}
         assert labels=={'Белякова':1,'Шекунов':2,'Яковлева':2},labels
-        if flags:assert any('АА Яковлева' in m and people[0] in m for m in report['PeopleMerges']),report
+        if flags:assert any('АА Яковлева' in m and people[0] in m and 'инициалы совпадают' in m for m in report['PeopleMerges']),report
 
 def test_incomplete_boxes_and_standalone_iul():
     temp=run_root/uuid.uuid4().hex;temp.mkdir()
@@ -336,9 +336,37 @@ def test_marks_parts_and_wide_days():
     assert days[0]==(2,datetime(2026,10,2)) and days[1][1]==datetime(2026,10,3),days
     slots=[ref.cell(12,c).value for c in range(2,days[1][0])]
     assert [v for v in slots if isinstance(v,str) and v.endswith('пд')]==[f'{n}пд' for n in range(1,8)],slots
-    assert ref.cell(12,days[1][0]+6).value=='Моё примечание','The note moves together with its day'
+    note=next(c.column for c in ref[9] if c.column>days[1][0] and c.value=='Примечание')
+    assert note==days[1][0]+8 and ref.cell(12,note).value=='Моё примечание','The note moves together with its day; a day has seven box slots'
     summary=cached['Свод'];col=summary_column(summary,datetime(2026,10,4))
     assert summary.cell(38,col).value==8,'«Часть 1» and «Часть 2» are one volume'
+
+def test_changed_dates_and_new_people():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir()
+    docs=[{3:'Том 1',9:'А.И. Петрова',10:datetime(2026,10,1),12:1},{3:'Том 2',9:'А.И. Петрова',10:datetime(2026,10,1),12:2},{3:'Том 3',9:'Сидоров Олег Петрович',10:datetime(2026,10,2),12:3},{3:'Том 4',12:4}]
+    source=book(temp/'source.xlsx',docs)
+    target=book(temp/'svod.xlsx',[{3:d[3]} for d in docs],['Петрова Анна Ивановна','Петрова А.И.'])
+    w=load_workbook(target);ref=w['Справка по томам'];ref['B8']=datetime(2026,10,1);ref['G9']='ИТОГО';ref['H14']='Записка Петровой';w.save(target)
+    report=run(target,[source],False,'--match-surnames')
+    assert any('Петрова А.И.' in m and 'объединена' in m for m in report['PeopleMerges']),report
+    formulas=load_workbook(target);cached=load_workbook(target,data_only=True);ref=cached['Справка по томам']
+    names={ref.cell(r,1).value for r in range(12,60,2)}-{None,''}
+    assert {'Петрова Анна Ивановна','Сидоров Олег Петрович'}<=names and not names&{'Петрова А.И.','А.И. Петрова'},names
+    starts=[c.column for c in formulas['Справка по томам'][8] if isinstance(c.value,str) and 'AGGREGATE' in c.value]
+    assert [ref.cell(8,c).value for c in starts]==[datetime(2026,10,1),datetime(2026,10,2),None,None],'Days are the dates of the main sheet plus spare days'
+    assert starts[1]-starts[0]==9 and ref.cell(12,starts[0]+8).value=='Записка Петровой','Seven box slots; the note of a merged row moves to its person'
+    spare=[r for r in range(12,60,2) if 'AGGREGATE' in str(formulas['Справка по томам'].cell(r,1).value)]
+    assert len(spare)==2 and all(ref.cell(r,1).value in (None,'') for r in spare),spare
+    summary=formulas['Свод'];col=summary_column(cached['Свод'],datetime(2026,10,4),5)
+    assert 'COUNTIFS' in summary.cell(9,col).value and 'COUNTIFS' in summary.cell(10,col).value and cached['Свод'].cell(9,col).value==3
+    # The operator moves Том 2 to a later day and writes a new reviewer in the main sheet; the next build follows the main sheet.
+    w=load_workbook(target);m=w[MAIN];m['J8']=datetime(2026,10,3);m['I10']='Новикова';m['J10']=datetime(2026,10,2);w.save(target)
+    run(target,[source],False,'--match-surnames')
+    cached=load_workbook(target,data_only=True);ref=cached['Справка по томам'];h=next(c.column for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3')
+    assert cached[MAIN]['J8'].value==datetime(2026,10,3) and ref.cell(8,h+4).value==datetime(2026,10,3),'A later date in J is not replaced by the earlier one'
+    assert [ref.cell(8,c).value for c in starts[:3]]==[datetime(2026,10,1),datetime(2026,10,2),datetime(2026,10,3)]
+    assert 'Новикова' in {ref.cell(r,1).value for r in range(12,60,2)}
+    summary=cached['Свод'];assert [summary.cell(9,summary_column(summary,datetime(2026,10,d),5)).value for d in (1,2,4)]==[1,3,4]
 
 test_merge()
 test_existing_target()
@@ -354,5 +382,6 @@ test_filled_rows_keep_reviewer_and_box()
 test_marks_parts_and_wide_days()
 test_kind_table_and_notes()
 test_long_calendar_filter_duplicates()
-print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks and wide days')
+test_changed_dates_and_new_people()
+print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks, wide days, live dates and new reviewers')
 

@@ -1,4 +1,4 @@
-﻿param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='1.4.0')
+﻿param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='1.5.0')
 $ErrorActionPreference='Stop'
 Push-Location -LiteralPath $PSScriptRoot
 $infoPath=Join-Path $PSScriptRoot 'AppInfo.cs'
