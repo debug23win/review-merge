@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
@@ -17,6 +18,8 @@ namespace ReviewMerge {
         static readonly XNamespace C="http://schemas.openxmlformats.org/package/2006/content-types";
         static readonly CultureInfo Inv=CultureInfo.InvariantCulture;
         readonly Dictionary<string,byte[]> entries=new Dictionary<string,byte[]>(StringComparer.Ordinal);
+        readonly MergeOptions options;
+        public XlsxWriter(MergeOptions options=null){this.options=options??new MergeOptions();}
         XDocument book,rels,types,styles;
         int bodyStyle,headStyle,dateStyle,dateHeadStyle,intStyle,percentStyle,titleStyle,noteStyle;
         readonly Dictionary<int,int> mainDateStyles=new Dictionary<int,int>();
@@ -24,10 +27,13 @@ namespace ReviewMerge {
             int id;if(mainDateStyles.TryGetValue(original,out id))return id;
             var xfs=styles.Root.Element(N+"cellXfs");var source=xfs.Elements().ElementAt(original);var xf=new XElement(source);xf.SetAttributeValue("numFmtId",(int)xfs.Elements().ElementAt(dateStyle).Attribute("numFmtId"));xf.SetAttributeValue("applyNumberFormat",1);id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);mainDateStyles[original]=id;return id;
         }
-        static string BoxKey(MergedRow row){double box;string kind=Text(row.Values[10]).Trim().ToUpperInvariant();return double.TryParse(Text(row.Values[11]),NumberStyles.Float,Inv,out box)&&box>0&&box==Math.Floor(box)?(kind==""?"Не указан":kind)+"|"+box.ToString("0",Inv):"";}
         string mainPath;
         static string Text(object v) {return XlsxReader.Text(v);}
-        XDocument Xml(string path) {using(var m=new MemoryStream(entries[path]))using(var r=XmlReader.Create(m,new XmlReaderSettings {DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null}))return XDocument.Load(r);}
+        XDocument Xml(string path) {
+            XDocument doc;using(var m=new MemoryStream(entries[path]))using(var r=XmlReader.Create(m,new XmlReaderSettings {DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null}))doc=XDocument.Load(r);
+            if(path.StartsWith("xl/worksheets/",StringComparison.Ordinal))Rules.NumberCells(doc);
+            return doc;
+        }
         void Store(string path,XDocument xml) {using(var m=new MemoryStream()){xml.Save(m);entries[path]=m.ToArray();}}
         int AddStyle(int font,int fill,int num,bool wrap) {
             var xfs=styles.Root.Element(N+"cellXfs");int id=xfs.Elements().Count();
@@ -132,43 +138,46 @@ namespace ReviewMerge {
             var sourceStyles=new Dictionary<int,int>();
             var sample=data.Elements(N+"row").FirstOrDefault(e=>(int)e.Attribute("r")==first);
             if(sample!=null)foreach(var c in sample.Elements(N+"c")){int col=Column((string)c.Attribute("r"));sourceStyles[col]=(int?)c.Attribute("s")??0;}
-            var firstBoxes=new HashSet<string>();var firstBoxDates=new Dictionary<string,double>();
-            var boxKeys=new List<string>();var dates=new List<double?>();var issues=new List<int>();var checkedFlags=new List<int>();
+            var boxKeys=new List<List<string>>();var dates=new List<double?>();var issues=new List<int>();var checkedFlags=new List<int>();
             foreach(var r in result.Rows){
-                string key=BoxKey(r);
                 int checked_=Text(r.Values[8])!=""?1:0;double? date=checked_==1?XlsxReader.DateSerial(r.Values[9]):null;
                 if(date.HasValue && r.FirstReviewDate.HasValue)date=Math.Min(date.Value,r.FirstReviewDate.Value);
                 int issue=r.Values.Skip(12).Take(6).Any(v=>Text(v)!="" && Text(v)!="0") || Text(r.Values[18])!="" || Text(r.Values[19])!=""?1:0;
-                boxKeys.Add(key);dates.Add(date);issues.Add(issue);checkedFlags.Add(checked_);
-                if(key!="" && date.HasValue && (!firstBoxDates.ContainsKey(key) || firstBoxDates[key]>date.Value))firstBoxDates[key]=date.Value;
+                boxKeys.Add(Rules.BoxKeys(r.Values[10],r.Values[11]));dates.Add(date);issues.Add(issue);checkedFlags.Add(checked_);
             }
-            var usedBoxDate=new HashSet<string>();
             for(int i=0;i<result.Rows.Count;i++){
                 token.ThrowIfCancellationRequested();int rn=rowNumbers[i];var row=result.Rows[i];XElement xmlrow;
                 bool keep=existing.TryGetValue(rn,out xmlrow);if(!keep){xmlrow=new XElement(N+"row",new XAttribute("r",rn));existing[rn]=xmlrow;data.Add(xmlrow);}
-                int noteLines=Math.Max(Text(row.Values[18]).Split('\n').Length,Text(row.Values[19]).Split('\n').Length);
-                bool notesChanged=!keep||row.TargetRow==null||Text(row.TargetRow.Values[18])!=Text(row.Values[18])||Text(row.TargetRow.Values[19])!=Text(row.Values[19]);
-                if(noteLines>1&&notesChanged){xmlrow.SetAttributeValue("ht",Math.Min(120,Math.Max(30,noteLines*15)));xmlrow.SetAttributeValue("customHeight",1);}
-                for(int col=keep?9:1;col<=20;col++){
-                    var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);
-                    if(col!=10&&keep&&row.TargetRow!=null&&Text(row.TargetRow.Values[col-1])==Text(row.Values[col-1]))continue;
-                    int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
-                    if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
-                    object value=row.Values[col-1];if(col==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&row.TargetRow!=null&&Text(row.TargetRow.Values[col-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
-                    SetCell(xmlrow,Cell(rn,col,value,style));
-                }
-                /* Calculation cells belong on the reference sheet, outside the main register. */
-                var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
+                WriteMainRow(xmlrow,rn,keep,row,row.TargetRow,sourceStyles);
+                // A document repeated in the consolidated book gets the same review data in every repeated row.
+                foreach(var copy in row.TargetDuplicates){XElement other;if(existing.TryGetValue(copy.Row,out other))WriteMainRow(other,copy.Row,true,row,copy,sourceStyles);}
             }
             int maxCol=Math.Max(20,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(20).Max());
             var dimension=main.Root.Element(N+"dimension");if(dimension==null){dimension=new XElement(N+"dimension");var sheetPr=main.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else main.Root.AddFirst(dimension);}dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(maxCol)+last);
-            var filter=main.Root.Element(N+"autoFilter");if(filter!=null)filter.SetAttributeValue("ref","A"+result.HeaderRow+":T"+last);
+            var filter=main.Root.Element(N+"autoFilter");
+            if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(20,Column(right)))+last);}
             Store(mainPath,main);progress(65,"Данные проверки объединены. Статистика рассчитывается на листе «Свод»");
-            RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags,firstBoxDates);
-            Finish(output,result,asOf,firstBoxDates,progress,token);
+            RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags);
+            Finish(output,result,asOf,progress,token);
         }
-        void Finish(string output,MergeResult result,DateTime asOf,Dictionary<string,double> firstBoxDates,Action<int,string> progress,CancellationToken token) {
-            var calc=book.Root.Element(N+"calcPr");if(calc==null){calc=new XElement(N+"calcPr");book.Root.Add(calc);}calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",1);calc.SetAttributeValue("calcId",0);
+        void WriteMainRow(XElement xmlrow,int rn,bool keep,MergedRow row,SourceRow previous,Dictionary<int,int> sourceStyles) {
+            int noteLines=Math.Max(Text(row.Values[18]).Split('\n').Length,Text(row.Values[19]).Split('\n').Length);
+            bool notesChanged=!keep||previous==null||Text(previous.Values[18])!=Text(row.Values[18])||Text(previous.Values[19])!=Text(row.Values[19]);
+            if(noteLines>1&&notesChanged){xmlrow.SetAttributeValue("ht",Math.Min(120,Math.Max(30,noteLines*15)));xmlrow.SetAttributeValue("customHeight",1);}
+            for(int col=keep?9:1;col<=20;col++){
+                var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);
+                if(col!=10&&keep&&previous!=null&&Text(previous.Values[col-1])==Text(row.Values[col-1]))continue;
+                int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
+                if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
+                object value=row.Values[col-1];if(col==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous.Values[col-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
+                SetCell(xmlrow,Cell(rn,col,value,style));
+            }
+            /* Calculation cells belong on the reference sheet, outside the main register. */
+            var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
+        }
+        void Finish(string output,MergeResult result,DateTime asOf,Action<int,string> progress,CancellationToken token) {
+            // Excel recalculates on open; a stored forced full calculation would recalculate the whole book after every edit.
+            var calc=book.Root.Element(N+"calcPr");if(calc==null){calc=new XElement(N+"calcPr");book.Root.Add(calc);}calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",null);calc.SetAttributeValue("calcId",0);
             rels.Root.Elements().Where(e=>((string)e.Attribute("Type")??"").EndsWith("/calcChain")).Remove();types.Root.Elements().Where(e=>((string)e.Attribute("PartName")??"").EndsWith("/calcChain.xml")).Remove();entries.Remove("xl/calcChain.xml");
             int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>(string)x.e.Attribute("name")=="Свод").i;
             var view=book.Root.Element(N+"bookViews");if(view==null){view=new XElement(N+"bookViews");book.Root.Element(N+"sheets").AddBeforeSelf(view);}if(!view.Elements().Any())view.Add(new XElement(N+"workbookView"));foreach(var workbookView in view.Elements())workbookView.SetAttributeValue("activeTab",svIndex);
