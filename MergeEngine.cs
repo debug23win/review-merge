@@ -141,10 +141,12 @@ namespace ReviewMerge {
             foreach (var r in result.Rows) {
                 var boxes = own(r);
                 if (boxes.Count == 0 && partOfVolume(r)) boxes = volumeOf[r].Select(own).FirstOrDefault(b => b.Count > 0) ?? boxes;
-                string key = boxes.Count > 0 ? Rules.BoxList(boxes) : partOfVolume(r) ? "\u001f" + Rules.VolumeKey(r.Values[2], r.Values[3]) : null;
-                if (key == null) continue;
-                List<MergedRow> list; if (!groups.TryGetValue(key, out list)) { groups[key] = list = new List<MergedRow>(); order.Add(key); }
-                list.Add(r);
+                // A row of a list "45 и 46" belongs to box 45 and to box 46.
+                var keys = boxes.Count > 0 ? boxes.Select(b => Rules.BoxList(new[] { b })).ToList() : partOfVolume(r) ? new List<string> { "\u001f" + Rules.VolumeKey(r.Values[2], r.Values[3]) } : new List<string>();
+                foreach (string key in keys) {
+                    List<MergedRow> list; if (!groups.TryGetValue(key, out list)) { groups[key] = list = new List<MergedRow>(); order.Add(key); }
+                    list.Add(r);
+                }
             }
             var result2 = new List<IncompleteBox>();
             foreach (string key in order) {

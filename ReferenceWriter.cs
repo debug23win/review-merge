@@ -8,22 +8,24 @@ using System.Xml.Linq;
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
         const string CalculationMarker="ReviewMerge.FirstDates.v3";
-        const int HelperWidth=48,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
+        const int HelperWidth=49,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
         sealed class VolumeRecord {public string List="",Who,Raw="",Kind="";public List<string> Boxes=new List<string>();public double? Date;public int Issue;public bool IsVolume=true;}
         // One day of the reference sheet: box slots, the "boxes / volumes" total and the note column. A spare day gets a date when a new date appears in the main sheet.
         sealed class DayBlock {public double? Date;public int Start,Slots;public int Total{get{return Start+Slots;}}public int Note{get{return Start+Slots+1;}}}
         sealed class Person {public string Name;public int Row;public bool FromSheet,Used;}
         sealed class ReferenceLayout {
             public XDocument Previous;
-            public int Helper,End,OldHelper,OldEnd,OldPeopleEnd=43,ManifestStart,BoxEnd,ManifestEnd,BoxCount,OldBlocksEnd=1,BlocksEnd=1,Shift;
+            // Totals: the rows "ИТОГО проверено коробов / томов" below the reviewers; OldDayEnd is the last row of reviewers and totals in the previous sheet.
+            public int Helper,End,OldHelper,OldEnd,OldTotals=42,OldDayEnd=43,Totals=42,ManifestStart,BoxEnd,ManifestEnd,BoxCount,OldBlocksEnd=1,BlocksEnd=1,Shift;
             public readonly List<DayBlock> Blocks=new List<DayBlock>(),OldBlocks=new List<DayBlock>();
             public readonly List<List<int>> VolumeGroups=new List<List<int>>();
             public readonly SortedDictionary<int,string> People=new SortedDictionary<int,string>();
             // Rows for reviewers who appear in the main sheet after the build: their names are formulas.
             public readonly List<int> SpareRows=new List<int>();
-            // The row of a short spelling ("АА Яковлева") merged into the row of the person: its notes move there.
-            public readonly Dictionary<int,int> MergedRows=new Dictionary<int,int>();
+            // Where rows of the previous sheet went: a moved reviewer, a short spelling ("АА Яковлева") merged into its person, the totals. Notes follow.
+            public readonly Dictionary<int,int> RowMap=new Dictionary<int,int>();
             public readonly List<string> Boxes=new List<string>();
+            public readonly Dictionary<int,string> SpareNames=new Dictionary<int,string>();
             // Reviewer as written in the files -> person of the reference sheet; person -> row label of the surname statistics.
             public readonly Dictionary<string,string> Names=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string,string> StatKeys=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
@@ -93,14 +95,18 @@ namespace ReviewMerge {
             layout.OldEnd=layout.OldHelper>0?Convert.ToInt32(Value(At(old,1,layout.OldHelper+4))??43,Inv):43;
             if(old!=null) {
                 ReadOldBlocks(layout);
-                // Names typed in column A are kept; a formula there is a spare row of the previous build.
-                Func<int,string> name=r=>{var c=At(old,r,1);return c==null||c.Element(N+"f")!=null?"":Rules.CleanName(Value(c));};
-                for(int r=12;r<=40;r+=2){string who=name(r);if(who!="")layout.People[r]=who;}
-                if(layout.OldHelper>0&&Text(Value(At(old,1,layout.OldHelper)))==CalculationMarker) {
-                    int start=Convert.ToInt32(Value(At(old,1,layout.OldHelper+3))??48,Inv);layout.OldPeopleEnd=Math.Max(43,start-3);
-                    for(int r=44;r<start-2;r+=2){string who=name(r);if(who!="")layout.People[r]=who;}
-                    for(int r=start;r<=layout.OldEnd;r++){string key=Text(Value(At(old,r,1)))+"|"+Text(Value(At(old,r,2)));if(!key.StartsWith("|",StringComparison.Ordinal)&&!key.EndsWith("|",StringComparison.Ordinal))layout.Expected[key]=Value(At(old,r,5));}
-                }
+                // Names typed in column A are kept; a formula there is a spare row of the previous build. Reviewers are the rows above "ИТОГО проверено коробов",
+                // wherever it is after rows were inserted in Excel, and, in sheets of versions 1.4-1.5, the rows between the totals and the box table.
+                bool ours=layout.OldHelper>0&&Text(Value(At(old,1,layout.OldHelper)))==CalculationMarker;int start=ours?Convert.ToInt32(Value(At(old,1,layout.OldHelper+3))??48,Inv):0;
+                Func<int,string> text=r=>{var c=At(old,r,1);return c==null||c.Element(N+"f")!=null?"":Rules.CleanName(Value(c));};
+                Func<string,bool> label=t=>{string n=XlsxReader.Normal(t).Replace('Ё','Е');return n.Contains("ИТОГО")||n.Contains("УЧЕТ ПРОВЕРЕННЫХ")||n.Contains("ФИО ПРОВЕРЯЮЩЕГО");};
+                int scan=ours?start-3:300;
+                layout.OldTotals=Enumerable.Range(12,Math.Max(0,scan-11)).FirstOrDefault(r=>XlsxReader.Normal(Value(At(old,r,1))).Contains("ИТОГО ПРОВЕРЕНО КОРОБОВ"));if(layout.OldTotals==0)layout.OldTotals=42;
+                layout.OldDayEnd=Math.Max(layout.OldTotals+1,ours?start-3:0);
+                for(int r=12;r<=layout.OldDayEnd;r++){if(r==layout.OldTotals||r==layout.OldTotals+1||(!ours&&r>layout.OldTotals))continue;string who=text(r);if(who!=""&&!label(who))layout.People[r]=who;}
+                // A spare row of the previous build shows a reviewer typed after the build; its notes go to the row that reviewer gets now.
+                for(int r=layout.OldTotals+2;ours&&r<=layout.OldDayEnd;r++){var c=At(old,r,1);if(c!=null&&c.Element(N+"f")!=null&&Rules.CleanName(Value(c))!="")layout.SpareNames[r]=Rules.CleanName(Value(c));}
+                if(ours)for(int r=start;r<=layout.OldEnd;r++){string key=Text(Value(At(old,r,1)))+"|"+Text(Value(At(old,r,2)));if(!key.StartsWith("|",StringComparison.Ordinal)&&!key.EndsWith("|",StringComparison.Ordinal))layout.Expected[key]=Value(At(old,r,5));}
             }
             this.referenceLayout=layout;
             // Reviewers come from the main sheet; fuller spellings go first, so a new "Петров П.П." joins "Петров Пётр Петрович" of the same files.
@@ -115,12 +121,19 @@ namespace ReviewMerge {
                 if(same.Count!=1)continue;
                 persons.Remove(p);mergedInto[p.Row]=same[0];result.PeopleMerges.Add("Строка справки «"+p.Name+"» объединена со строкой «"+same[0].Name+"»");
             }
-            var taken=new HashSet<int>(persons.Where(p=>p.FromSheet).Select(p=>p.Row));
-            Func<int> nextRow=()=>{int r=Enumerable.Range(0,15).Select(i=>12+i*2).FirstOrDefault(x=>!taken.Contains(x));if(r==0)r=Math.Max(44,taken.Max()+2);taken.Add(r);return r;};
+            // Reviewers keep their rows above the totals; a row right under another reviewer, reviewers below the totals (versions 1.4-1.5) and new reviewers
+            // take the first free pair of rows. The totals follow the last reviewer, spare rows follow the totals.
+            var taken=new List<int>();var moved=new List<Person>();
+            foreach(var p in persons.Where(p=>p.FromSheet).OrderBy(p=>p.Row).ToList()){if(p.Row<layout.OldTotals&&taken.All(t=>p.Row>=t+2))taken.Add(p.Row);else moved.Add(p);}
+            Func<int> nextRow=()=>{int r=12;while(taken.Any(t=>Math.Abs(t-r)<2))r+=2;taken.Add(r);return r;};
+            foreach(var p in moved){int was=p.Row;p.Row=nextRow();layout.RowMap[was]=p.Row;}
             foreach(var p in persons.Where(p=>!p.FromSheet))p.Row=nextRow();
-            for(int i=0;i<SparePeople;i++)layout.SpareRows.Add(nextRow());
+            layout.Totals=Math.Max(42,taken.DefaultIfEmpty(0).Max()+2);
+            for(int i=0;i<SparePeople;i++)layout.SpareRows.Add(layout.Totals+2+2*i);
             layout.People.Clear();foreach(var p in persons)layout.People[p.Row]=p.Name;
-            foreach(var pair in mergedInto)layout.MergedRows[pair.Key]=pair.Value.Row;
+            foreach(var pair in mergedInto)layout.RowMap[pair.Key]=pair.Value.Row;
+            foreach(var pair in layout.SpareNames){Person p;if(map.TryGetValue(pair.Value,out p))layout.RowMap[pair.Key]=p.Row;}
+            if(layout.Previous!=null){layout.RowMap[layout.OldTotals]=layout.Totals;layout.RowMap[layout.OldTotals+1]=layout.Totals+1;}
             foreach(var pair in map)layout.Names[pair.Key]=pair.Value.Name;
             layout.NameTable.AddRange(layout.Names);layout.NameTable.AddRange(layout.People.Values.Where(v=>!layout.Names.ContainsKey(v)).Select(v=>new KeyValuePair<string,string>(v,v)));
             // Statistics show the surname; the full name only when two different people share it.
@@ -144,7 +157,7 @@ namespace ReviewMerge {
             foreach(double? day in days.Concat(Enumerable.Repeat((double?)null,SpareDays))){layout.Blocks.Add(new DayBlock{Date=day,Start=col,Slots=slots});col+=slots+2;}
             layout.BlocksEnd=col-1;layout.Shift=layout.OldBlocks.Count>0?layout.BlocksEnd-layout.OldBlocksEnd:0;
             layout.Boxes.AddRange(layout.BoxFiles.SelectMany(v=>v.Boxes).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v.Substring(0,v.IndexOf('|')),StringComparer.Ordinal).ThenBy(BoxNumber));
-            layout.BoxCount=layout.Boxes.Count;layout.ManifestStart=Math.Max(48,layout.People.Keys.Concat(layout.SpareRows).Max()+6);layout.BoxEnd=layout.ManifestStart+layout.Boxes.Count-1;layout.ManifestEnd=layout.BoxEnd+SpareBoxes;
+            layout.BoxCount=layout.Boxes.Count;layout.ManifestStart=Math.Max(48,layout.SpareRows.Max()+6);layout.BoxEnd=layout.ManifestStart+layout.Boxes.Count-1;layout.ManifestEnd=layout.BoxEnd+SpareBoxes;
             int existingEnd=old==null?1:old.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).Where(c=>layout.OldHelper==0||c<layout.OldHelper).DefaultIfEmpty(1).Max();
             if(layout.OldBlocks.Count>0&&existingEnd>layout.OldBlocksEnd)existingEnd+=layout.Shift;
             layout.End=Math.Max(existingEnd,layout.BlocksEnd);
@@ -172,9 +185,9 @@ namespace ReviewMerge {
             grid.Set(rn,h+37,v.Raw,bodyStyle,ChooseVolumeField(h,rn,indices,9,true));grid.Set(rn,h+38,v.Kind,bodyStyle,FirstFilled(h,rn,indices,8));grid.Set(rn,h+39,v.List,bodyStyle,FirstFilled(h,rn,indices,0));
             string rawRef=MergeEngine.ExcelColumn(h+37)+rn,keyRef=MergeEngine.ExcelColumn(h+39)+rn,whoRef=MergeEngine.ExcelColumn(h+40)+rn,dRef=MergeEngine.ExcelColumn(h+13)+rn,volumeRef=MergeEngine.ExcelColumn(h+2)+rn,names=NamesRange(h);
             grid.Set(rn,h+40,v.Who,bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+names+",2,FALSE),"+rawRef+"))");
-            // One box is shown as "45пд"; boxes of a list cell are shown as read at the build, e.g. "45пд, 46пд".
-            if(v.Boxes.Count>1)grid.Set(rn,h+41,display,bodyStyle);
-            else grid.Set(rn,h+41,display,bodyStyle,"IF("+keyRef+"=\"\",\"\",MID("+keyRef+",FIND(\"|\","+keyRef+")+1,LEN("+keyRef+")-FIND(\"|\","+keyRef+")-1)&LOWER(MID("+keyRef+",2,FIND(\"|\","+keyRef+")-2)))");
+            // Boxes are shown as "45пд" or "45пд, 46пд": ";ПД|45;ПД|46;" without the kind keys, the kind in lower case after each number.
+            string kindOf="MID("+keyRef+",2,FIND(\"|\","+keyRef+")-2)",numbersOf="SUBSTITUTE("+keyRef+",\";\"&"+kindOf+"&\"|\",\";\")";
+            grid.Set(rn,h+41,display,bodyStyle,"IF("+keyRef+"=\"\",\"\",SUBSTITUTE(MID("+numbersOf+",2,LEN("+numbersOf+")-2),\";\",LOWER("+kindOf+")&\", \")&LOWER("+kindOf+"))");
             bool dated=v.IsVolume&&v.Date.HasValue&&v.Who!="";int unique=dated&&v.List!=""&&!referenceLayout.Volumes.Take(j).Any(o=>o.IsVolume&&o.List==v.List&&o.Who==v.Who&&o.Date==v.Date)?1:0;
             // Keys "date|reviewer" let the day cells compare one column instead of three; a record of the day is shown once per box list.
             string day=dated?v.Date.Value.ToString(Inv)+"|"+v.Who:"",tripleRef=MergeEngine.ExcelColumn(h+6)+rn,dayKey=dRef+"&\"|\"&"+whoRef;
@@ -192,11 +205,12 @@ namespace ReviewMerge {
                 foreach(var c in row.Elements(N+"c")){
                     int col=Column((string)c.Attribute("r"));if(l.OldHelper>0&&col>=l.OldHelper&&col<l.OldHelper+HelperWidth)continue;
                     // Notes stay with their day and person; other cells of the days are rebuilt.
-                    var block=rn>=8&&rn<=l.OldPeopleEnd?OldBlockAt(col):null;
+                    var block=rn>=8&&rn<=l.OldDayEnd?OldBlockAt(col):null;
                     if(block!=null){if(col==block.Note&&rn>=10)notes.Add(Tuple.Create(rn,block,c));continue;}
-                    if(l.OldHelper>0&&rn>=44&&rn<=l.OldEnd&&col<=Math.Max(l.End,l.OldBlocksEnd))continue;
-                    if(rn>=8&&rn<=43) {
-                        if(col==1&&rn>=12&&rn<=41&&(c.Element(N+"f")!=null||l.MergedRows.ContainsKey(rn)))continue;
+                    if(l.OldHelper>0&&rn>l.OldDayEnd&&rn<=l.OldEnd&&col<=Math.Max(l.End,l.OldBlocksEnd))continue;
+                    if(rn>=8&&rn<=l.OldDayEnd) {
+                        // Names and totals labels of column A are written anew.
+                        if(col==1&&rn>=12)continue;
                         if(l.OldBlocks.Count>0&&col>l.OldBlocksEnd)col+=l.Shift;
                     }
                     var cell=new XElement(c);cell.SetAttributeValue("r",MergeEngine.ExcelColumn(col)+rn);
@@ -211,7 +225,7 @@ namespace ReviewMerge {
             var first=l.OldBlocks.FirstOrDefault()??new DayBlock{Start=2,Slots=MinSlots};
             int label=StyleAt(old,12,1,bodyStyle),num=StyleAt(old,13,first.Total,intStyle),boxStyle=StyleAt(old,12,first.Start,bodyStyle),countStyle=StyleAt(old,13,first.Start,intStyle),head=StyleAt(old,9,first.Start,headStyle);
             if(old==null){g.Set(1,1,"Коробов получено",bodyStyle);g.Set(2,1,"Томов по проекту акта",bodyStyle);g.Set(8,1,"ФИО проверяющего",headStyle);}
-            g.Set(3,1,"ИТОГО коробов проверить",bodyStyle);g.Set(4,1,"ИТОГО томов проверить",bodyStyle);g.Set(42,1,"ИТОГО проверено коробов",StyleAt(old,42,1,headStyle));g.Set(43,1,"ИТОГО проверено томов",StyleAt(old,43,1,headStyle));
+            g.Set(3,1,"ИТОГО коробов проверить",bodyStyle);g.Set(4,1,"ИТОГО томов проверить",bodyStyle);g.Set(l.Totals,1,"ИТОГО проверено коробов",StyleAt(old,l.OldTotals,1,headStyle));g.Set(l.Totals+1,1,"ИТОГО проверено томов",StyleAt(old,l.OldTotals+1,1,headStyle));
             int title=l.ManifestStart-2,header=l.ManifestStart-1;g.Set(title,1,"УЧЁТ ПРОВЕРЕННЫХ КОРОБОВ",headStyle);
             string[] headers={"Вид","Короб","Томов в реестре","Проверено томов","Всего томов по описи","Дата проверки короба","Состояние","Проверил короб"};for(int c=0;c<headers.Length;c++)g.Set(header,c+1,headers[c],headStyle);g.Heights[header]=75;
             var completion=l.Completed;var completedBy=l.CompletedBy;int fileLast=l.BoxFiles.Count+6;string fileDates=LocalRange(h+4,7,fileLast),fileKeys=LocalRange(h,7,fileLast),fileOwners=LocalRange(h+9,7,fileLast);
@@ -245,10 +259,16 @@ namespace ReviewMerge {
             for(int i=0;i<l.SpareRows.Count;i++)g.Set(l.SpareRows[i],1,"",label,"IFERROR(INDEX("+fileOwners+",_xlfn.AGGREGATE(15,6,(ROW("+fileOwners+")-6)/("+LocalRange(h+7,7,fileLast)+"=1),"+(i+1)+")),\"\")");
             var rows=l.People.Keys.Concat(l.SpareRows).OrderBy(r=>r).ToList();
             for(int b=0;b<l.Blocks.Count;b++) {
-                // A day shows the next date of the main sheet, so a changed date moves its boxes to the right day.
-                var block=l.Blocks[b];int start=block.Start;string d="$"+MergeEngine.ExcelColumn(start)+"$8",previous=b==0?null:"$"+MergeEngine.ExcelColumn(l.Blocks[b-1].Start)+"$8";
-                string day=previous==null?"IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/("+fileDates+">0),1),\"\")":"IF("+previous+"=\"\",\"\",IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/("+fileDates+">"+previous+"),1),\"\"))";
-                g.Set(8,start,block.Date.HasValue?(object)block.Date.Value:"",StyleAt(old,8,first.Start,dateHeadStyle),day);
+                // A day of the build keeps its date, so its notes stay under it. A spare day shows the next date of the main sheet that has no day yet:
+                // a date changed to a new day moves its boxes there at once.
+                var block=l.Blocks[b];int start=block.Start;string d="$"+MergeEngine.ExcelColumn(start)+"$8";
+                if(block.Date.HasValue)g.Set(8,start,block.Date.Value,StyleAt(old,8,first.Start,dateHeadStyle));
+                else {
+                    var fixedDays=l.Blocks.Where(x=>x.Date.HasValue).ToList();string previous=b>0&&!l.Blocks[b-1].Date.HasValue?"$"+MergeEngine.ExcelColumn(l.Blocks[b-1].Start)+"$8":null;
+                    string fresh=fixedDays.Count==0?"":"*ISNA(MATCH("+fileDates+",$B$8:$"+MergeEngine.ExcelColumn(fixedDays.Last().Note)+"$8,0))";
+                    string next="IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/(("+fileDates+">"+(previous??"0")+")"+fresh+"),1),\"\")";
+                    g.Set(8,start,"",StyleAt(old,8,first.Start,dateHeadStyle),previous==null?next:"IF("+previous+"=\"\",\"\","+next+")");
+                }
                 for(int slot=0;slot<block.Slots;slot++){int like=first.Start+Math.Min(slot,first.Slots-1);g.Set(9,start+slot,"Короб, вид",StyleAt(old,9,like,head));g.Set(10,start+slot,"Томов за сутки",StyleAt(old,10,like,head));g.Set(11,start+slot,slot+1,StyleAt(old,11,like,intStyle));}
                 g.Set(9,block.Total,"Коробов / томов",StyleAt(old,9,first.Total,head));g.Set(9,block.Note,"Примечание",StyleAt(old,9,first.Note,head));
                 foreach(int row in rows) {
@@ -262,8 +282,8 @@ namespace ReviewMerge {
                     g.Set(row,block.Total,shown?(object)completion.Count(v=>v.Value==block.Date&&completedBy[v.Key]==who):"",num,blank+"COUNTIFS("+completed+","+d+","+finishedWho+","+personRef+"))");
                     g.Set(row+1,block.Total,shown?(object)items.Count:"",num,blank+"COUNTIF("+dayKeys+","+dayKey+"))");
                 }
-                g.Set(42,block.Total,block.Date.HasValue?(object)completion.Count(v=>v.Value==block.Date):"",StyleAt(old,42,first.Total,num),"IF("+d+"=\"\",\"\",COUNTIF("+completed+","+d+"))");
-                g.Set(43,block.Total,block.Date.HasValue?(object)l.Volumes.Count(v=>v.IsVolume&&v.Date==block.Date):"",StyleAt(old,43,first.Total,num),"IF("+d+"=\"\",\"\",COUNTIFS("+dates+","+d+isv+"))");
+                g.Set(l.Totals,block.Total,block.Date.HasValue?(object)completion.Count(v=>v.Value==block.Date):"",StyleAt(old,l.OldTotals,first.Total,num),"IF("+d+"=\"\",\"\",COUNTIF("+completed+","+d+"))");
+                g.Set(l.Totals+1,block.Total,block.Date.HasValue?(object)l.Volumes.Count(v=>v.IsVolume&&v.Date==block.Date):"",StyleAt(old,l.OldTotals+1,first.Total,num),"IF("+d+"=\"\",\"\",COUNTIFS("+dates+","+d+isv+"))");
             }
             PlaceNotes(g,notes);
             object receivedBoxes=g.Rows.ContainsKey(1)&&g.Rows[1].ContainsKey(2)?Value(g.Rows[1][2]):null,receivedVolumes=g.Rows.ContainsKey(2)&&g.Rows[2].ContainsKey(2)?Value(g.Rows[2][2]):null;
@@ -296,7 +316,7 @@ namespace ReviewMerge {
             var l=referenceLayout;var oldSpare=l.OldBlocks.Where(b=>!b.Date.HasValue).ToList();var newSpare=l.Blocks.Where(b=>!b.Date.HasValue).ToList();var dated=l.Blocks.Where(b=>b.Date.HasValue).ToList();
             foreach(var note in notes) {
                 int rn=note.Item1,target;var from=note.Item2;var source=note.Item3;
-                if(l.MergedRows.TryGetValue(rn,out target))rn=target;else if(l.MergedRows.TryGetValue(rn-1,out target))rn=target+1;
+                if(l.RowMap.TryGetValue(rn,out target))rn=target;else if(l.RowMap.TryGetValue(rn-1,out target)&&rn-1!=l.OldTotals)rn=target+1;
                 int spareIndex=oldSpare.IndexOf(from);var to=from.Date.HasValue?l.Blocks.FirstOrDefault(b=>b.Date==from.Date):spareIndex<newSpare.Count?newSpare[spareIndex]:null;string prefix="";
                 if(to==null){to=dated.LastOrDefault(b=>from.Date.HasValue&&b.Date<from.Date)??dated.FirstOrDefault()??l.Blocks[0];if(from.Date.HasValue)prefix=DateTime.FromOADate(from.Date.Value).ToString("dd.MM.yyyy",Inv)+": ";}
                 if(!g.Rows.ContainsKey(rn))g.Rows[rn]=new SortedDictionary<int,XElement>();
