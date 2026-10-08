@@ -1,4 +1,4 @@
-﻿# Optional regression check using installed Microsoft Excel on artificial test_merge.py data.
+# Optional regression check using installed Microsoft Excel on artificial test_merge.py data.
 $ErrorActionPreference='Stop'
 $candidate=Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '.runs') -Directory | Where-Object {Test-Path -LiteralPath (Join-Path $_.FullName 'template.xlsx')} | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if(!$candidate){throw 'Run test_merge.py first'}
@@ -47,6 +47,17 @@ try {
     if($summary.Range('B51').Value2 -ne 1 -or $summary.Range('B52').Value2 -ne 3){throw 'Surname edit did not update volume statistics'}
     $main.Range('L9').Formula='3';$excelApp.CalculateFullRebuild()
     if($ref.Range($box1).Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Existing reviewed files must retain box review'}
+    # Live edits must use the same numeric box identity as the parser, including lists and ranges.
+    foreach($row in 7,8,13){$main.Cells.Item($row,12).Value2='к. №01'}
+    $excelApp.CalculateFullRebuild()
+    if($ref.Cells.Item(7,$marker.Column).Value2 -ne ';ПД|1;'){throw 'Leading zeros created a different box key'}
+    if($ref.Range($box1).Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Leading zeros erased the checked box date'}
+    $main.Range('L7').Value2='№02, №003';$excelApp.CalculateFullRebuild()
+    if($ref.Cells.Item(7,$marker.Column).Value2 -ne ';ПД|2;ПД|3;'){throw 'List tokens with leading zeros were not canonicalized'}
+    $main.Range('L7').Value2='к. 002-004';$excelApp.CalculateFullRebuild()
+    if($ref.Cells.Item(7,$marker.Column).Value2 -ne ';ПД|2;ПД|3;ПД|4;'){throw 'Range tokens with leading zeros were not canonicalized'}
+    $main.Range('L7').Value2='к. №02.0';$excelApp.CalculateFullRebuild()
+    if($ref.Cells.Item(7,$marker.Column).Value2 -ne ';ПД|2;'){throw 'Integer decimal box did not use its canonical key'}
     if($bookCheck.Windows.Item(1).SelectedSheets.Count -ne 1){throw 'Grouped sheets remain'}
     Write-Output 'Excel tests passed: reference formulas, boxes with review data, volume statistics by surname and independent active sheet'
 } finally {

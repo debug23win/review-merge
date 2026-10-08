@@ -100,8 +100,22 @@ namespace ReviewMerge {
                 bool ours=layout.OldHelper>0&&Text(Value(At(old,1,layout.OldHelper)))==CalculationMarker;int start=ours?Convert.ToInt32(Value(At(old,1,layout.OldHelper+3))??48,Inv):0;
                 Func<int,string> text=r=>{var c=At(old,r,1);return c==null||c.Element(N+"f")!=null?"":Rules.CleanName(Value(c));};
                 Func<string,bool> label=t=>{string n=XlsxReader.Normal(t).Replace('Ё','Е');return n.Contains("ИТОГО")||n.Contains("УЧЕТ ПРОВЕРЕННЫХ")||n.Contains("ФИО ПРОВЕРЯЮЩЕГО");};
-                int scan=ours?start-3:300;
-                layout.OldTotals=Enumerable.Range(12,Math.Max(0,scan-11)).FirstOrDefault(r=>XlsxReader.Normal(Value(At(old,r,1))).Contains("ИТОГО ПРОВЕРЕНО КОРОБОВ"));if(layout.OldTotals==0)layout.OldTotals=42;
+                // Numeric metadata does not move when Excel inserts rows. Find the visible table and totals in the actual cells instead.
+                var visibleRows=old.Root.Element(N+"sheetData").Elements(N+"row").Where(e=>(int)e.Attribute("r")>=12).ToList();
+                var boxHeader=visibleRows.FirstOrDefault(e=>XlsxReader.Normal(Value(e.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==1)))=="ВИД"
+                    &&XlsxReader.Normal(Value(e.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==2)))=="КОРОБ");
+                if(ours&&boxHeader!=null) {
+                    start=(int)boxHeader.Attribute("r")+1;layout.OldEnd=start-1;
+                    foreach(var row in visibleRows.Where(e=>(int)e.Attribute("r")>=start)) {
+                        var cells=row.Elements(N+"c").Where(c=>Column((string)c.Attribute("r"))<=8).ToList();
+                        var a=cells.FirstOrDefault(c=>Column((string)c.Attribute("r"))==1);var b=cells.FirstOrDefault(c=>Column((string)c.Attribute("r"))==2);
+                        bool valid;var boxes=Rules.ParseBoxes(Value(b),out valid);
+                        if(a!=null&&a.Element(N+"f")!=null||Text(Value(a))!=""&&valid&&boxes.Count==1)layout.OldEnd=(int)row.Attribute("r");
+                        else if(cells.Any(c=>c.Element(N+"f")!=null||Text(Value(c))!=""))break;
+                    }
+                }
+                layout.OldTotals=visibleRows.Where(e=>start==0||(int)e.Attribute("r")<start).Where(e=>XlsxReader.Normal(Value(e.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==1))).Contains("ИТОГО ПРОВЕРЕНО КОРОБОВ"))
+                    .Select(e=>(int)e.Attribute("r")).FirstOrDefault();if(layout.OldTotals==0)layout.OldTotals=42;
                 layout.OldDayEnd=Math.Max(layout.OldTotals+1,ours?start-3:0);
                 for(int r=12;r<=layout.OldDayEnd;r++){if(r==layout.OldTotals||r==layout.OldTotals+1||(!ours&&r>layout.OldTotals))continue;string who=text(r);if(who!=""&&!label(who))layout.People[r]=who;}
                 // A spare row of the previous build shows a reviewer typed after the build; its notes go to the row that reviewer gets now.
@@ -306,9 +320,20 @@ namespace ReviewMerge {
             }
             cols.RemoveNodes();cols.Add(widths);cols.Add(Col(h,h+HelperWidth-1,18,true));
             var merges=doc.Root.Element(N+"mergeCells");if(merges==null){merges=new XElement(N+"mergeCells");doc.Root.Element(N+"sheetData").AddAfterSelf(merges);}
-            int dayArea=Math.Max(l.OldBlocksEnd,l.BlocksEnd);
-            merges.Elements().Where(m=>{var r=Regex.Match((string)m.Attribute("ref")??"",@"^([A-Z]+)8:[A-Z]+8$");return r.Success&&Column(r.Groups[1].Value)>=2&&Column(r.Groups[1].Value)<=dayArea;}).Remove();
+            // Old seven-column days can overlap the rebuilt nine-column days and hide formulas (e.g. BE36:BE37 hides BE37).
+            // Rebuild merges only in the generated tables; unrelated user merges above or beside them stay intact.
+            int dayArea=Math.Max(l.OldBlocksEnd,l.BlocksEnd),dayEnd=Math.Max(l.OldDayEnd,l.SpareRows.Max()+1);
+            merges.Elements().Where(m=>{var r=Regex.Match((string)m.Attribute("ref")??"",@"^([A-Z]+)(\d+):([A-Z]+)(\d+)$");if(!r.Success)return false;
+                int left=Column(r.Groups[1].Value),top=int.Parse(r.Groups[2].Value,Inv),bottom=int.Parse(r.Groups[4].Value,Inv);
+                return left<=dayArea&&top<=dayEnd&&bottom>=8||left<=8&&top<=Math.Max(l.OldEnd,l.ManifestEnd)&&bottom>=Math.Min(l.OldDayEnd+1,l.ManifestStart-2);}).Remove();
             foreach(var block in l.Blocks)merges.Add(new XElement(N+"mergeCell",new XAttribute("ref",MergeEngine.ExcelColumn(block.Start)+"8:"+MergeEngine.ExcelColumn(block.Note)+"8")));
+            Action<int,int,int,int> mergeIfEmpty=(top,left,bottom,right)=>{bool empty=true;for(int r=top;r<=bottom;r++)for(int c=left;c<=right;c++) {
+                if(r==top&&c==left)continue;XElement cell;if(g.Rows.ContainsKey(r)&&g.Rows[r].TryGetValue(c,out cell)&&(cell.Element(N+"f")!=null||Text(Value(cell))!=""))empty=false;
+            }if(empty)merges.Add(new XElement(N+"mergeCell",new XAttribute("ref",MergeEngine.ExcelColumn(left)+top+":"+MergeEngine.ExcelColumn(right)+bottom)));};
+            mergeIfEmpty(8,1,11,1);
+            foreach(int row in rows){mergeIfEmpty(row,1,row+1,1);foreach(var block in l.Blocks)mergeIfEmpty(row,block.Note,row+1,block.Note);}
+            foreach(var block in l.Blocks){mergeIfEmpty(9,block.Total,11,block.Total);mergeIfEmpty(9,block.Note,11,block.Note);}
+            mergeIfEmpty(title,1,title,8);
             merges.SetAttributeValue("count",merges.Elements().Count());PutSheet("Справка по томам",doc);
         }
         // A note goes to the same date (a spare day to a spare day) and to the row of its person. When its date is gone, it joins the note of the previous day with its date in front.

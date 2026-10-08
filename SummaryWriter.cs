@@ -63,7 +63,10 @@ namespace ReviewMerge {
             string first="LEFT("+normal+",FIND(\"-\","+normal+")-1)",last="MID("+normal+",FIND(\"-\","+normal+")+1,9)";
             string from="FIND(\";\"&"+first+"&\";\","+numbers+")",to="FIND(\";\"&"+last+"&\";\","+numbers+")";
             string range="IFERROR(IF(AND("+to+">="+from+","+last+"-"+first+"<"+Rules.MaxBoxesInCell+"),SUBSTITUTE(MID("+numbers+","+from+","+to+"-"+from+"+LEN("+last+")+1),\";\","+item+")&\";\",\"\"),\"\")";
-            string live="IF("+normal+"=\"\",\"\",IF(ISERROR(FIND(\"-\","+normal+")),"+list+",IF(ISERROR(FIND(\",\","+normal+")),"+range+",\"\")))";
+            // VALUE uses the Excel locale; integer text such as "02.0" should work with either decimal separator.
+            string numeric="VALUE(SUBSTITUTE("+normal+",\".\",MID(1/2,2,1)))";
+            string single="IFERROR(IF(AND("+numeric+">0,"+numeric+"=INT("+numeric+"),"+numeric+"<1000000),"+item+"&TEXT("+numeric+",\"0\")&\";\",\"\"),\"\")";
+            string live="IF("+normal+"=\"\",\"\",IF(ISERROR(FIND(\"-\","+normal+")),IF(ISERROR(FIND(\",\","+normal+")),"+single+","+list+"),IF(ISERROR(FIND(\",\","+normal+")),"+range+",\"\")))";
             if(keys.Count==0||Rules.PlainBoxNumber(value))return live;
             string template=string.Concat(keys.Select(k=>"@"+k.Substring(k.IndexOf('|')+1)))+";";
             return "IF(TRIM("+box+")="+Literal(Regex.Replace(Text(value)," +"," "))+",SUBSTITUTE("+Literal(template)+",\"@\","+item+"),"+live+")";
@@ -71,10 +74,14 @@ namespace ReviewMerge {
         static readonly string[][] BoxSigns={new[]{"КОРОБА",""},new[]{"КОРОБ",""},new[]{"КОР.",""},new[]{"К.",""},new[]{"№",""},new[]{" И ",","},new[]{"И",","},new[]{";",","},new[]{"/",","},new[]{"–","-"},new[]{"—","-"},new[]{" ",""},new[]{",,",","}};
         // L of the main sheet as "45,46" or "45-48": upper case, words "короб", "кор.", "к." and "№" removed, "и", ";", "/" read as commas.
         static string BoxNormalFormula(string box) {
-            string f="UPPER("+box+"&\"\")";foreach(var pair in BoxSigns)f="SUBSTITUTE("+f+",\""+pair[0]+"\",\""+pair[1]+"\")";return f;
+            string f="UPPER("+box+"&\"\")";foreach(var pair in BoxSigns)f="SUBSTITUTE("+f+",\""+pair[0]+"\",\""+pair[1]+"\")";
+            // Canonical numeric tokens in lists and ranges, too: "к. №02", "02,003", "002-004" use boxes 2,3,4.
+            f="\",\"&"+f;for(int i=0;i<6;i++)f="SUBSTITUTE(SUBSTITUTE("+f+",\",0\",\",\"),\"-0\",\"-\")";
+            return "REPLACE("+f+",1,1,\"\")";
         }
         static string BoxNormal(object value) {
-            string t=(value is double?((double)value).ToString(Inv):Text(value)).ToUpperInvariant();foreach(var pair in BoxSigns)t=t.Replace(pair[0],pair[1]);return t;
+            string t=(value is double?((double)value).ToString(Inv):Text(value)).ToUpperInvariant();foreach(var pair in BoxSigns)t=t.Replace(pair[0],pair[1]);
+            t=","+t;for(int i=0;i<6;i++)t=t.Replace(",0",",").Replace("-0","-");return t.Substring(1);
         }
         static void MergeTitle(XDocument doc,int row,int end) {
             var merges=doc.Root.Element(N+"mergeCells");if(merges==null){merges=new XElement(N+"mergeCells");doc.Root.Element(N+"sheetData").AddAfterSelf(merges);}
