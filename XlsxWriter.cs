@@ -34,7 +34,7 @@ namespace ReviewMerge {
             if(path.StartsWith("xl/worksheets/",StringComparison.Ordinal))Rules.NumberCells(doc);
             return doc;
         }
-        void Store(string path,XDocument xml) {using(var m=new MemoryStream()){xml.Save(m);entries[path]=m.ToArray();}}
+        void Store(string path,XDocument xml) {using(var m=new MemoryStream()){xml.Save(m,SaveOptions.DisableFormatting);entries[path]=m.ToArray();}}
         int AddStyle(int font,int fill,int num,bool wrap) {
             var xfs=styles.Root.Element(N+"cellXfs");int id=xfs.Elements().Count();
             xfs.Add(new XElement(N+"xf",new XAttribute("numFmtId",num),new XAttribute("fontId",font),new XAttribute("fillId",fill),new XAttribute("borderId",0),new XAttribute("xfId",0),new XAttribute("applyNumberFormat",1),new XAttribute("applyAlignment",1),new XElement(N+"alignment",new XAttribute("vertical","center"),new XAttribute("wrapText",wrap?1:0))));

@@ -29,21 +29,28 @@ namespace ReviewMerge {
             return s;
         }
         public static string SurnameKey(string name) { return Surname(name).ToUpperInvariant().Replace('Ё', 'Е'); }
-        // Letters of the first name and patronymic: "Яковлева Александра Алексеевна", "АА Яковлева" and "Яковлева А.А." give "АА".
-        public static string Initials(string name) {
-            var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)), result = "";
+        // First name and patronymic in order: a word stays a word, initials give one letter each.
+        // "Яковлева Александра Алексеевна" gives АЛЕКСАНДРА, АЛЕКСЕЕВНА; "АА Яковлева" and "Яковлева А.А." give А, А.
+        static List<string> GivenNames(string name) {
+            var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)); var result = new List<string>();
             foreach (string t in tokens) {
                 if (t == surname) { surname = null; continue; }
-                result += IsInitials(t) ? new string(t.Where(char.IsLetter).ToArray()) : t.Substring(0, 1);
+                if (IsInitials(t)) result.AddRange(t.Where(char.IsLetter).Select(ch => ch.ToString())); else result.Add(t.TrimEnd('.'));
             }
-            return result.ToUpperInvariant().Replace('Ё', 'Е');
+            return result.Select(t => t.ToUpperInvariant().Replace('Ё', 'Е')).ToList();
         }
+        public static string Initials(string name) { return string.Concat(GivenNames(name).Select(t => t.Substring(0, 1))); }
         // Words besides the surname: 2 for a full name, 0 for initials or a bare surname.
         public static int Fullness(string name) { var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)); return tokens.Count(t => !IsInitials(t)) - (surname == null ? 0 : 1); }
-        // One surname and initials that agree with the name, e.g. "АА Яковлева" and "Яковлева Александра Алексеевна".
+        // One surname and a name that agrees in every written part: "АА Яковлева" and "Яковлева Александра Алексеевна" agree;
+        // "Иванов Алексей Андреевич" and "Иванов Александр Александрович" do not, although their initials are the same.
         public static bool InitialsAgree(string a, string b) {
-            string x = Initials(a), y = Initials(b);
-            return SurnameKey(a) != "" && SurnameKey(a) == SurnameKey(b) && x != "" && y != "" && (x.StartsWith(y, StringComparison.Ordinal) || y.StartsWith(x, StringComparison.Ordinal));
+            var x = GivenNames(a); var y = GivenNames(b);
+            if (SurnameKey(a) == "" || SurnameKey(a) != SurnameKey(b) || x.Count == 0 || y.Count == 0) return false;
+            for (int i = 0; i < Math.Min(x.Count, y.Count); i++) {
+                if (x[i].Length > 1 && y[i].Length > 1 ? x[i] != y[i] : x[i][0] != y[i][0]) return false;
+            }
+            return true;
         }
         // Same person written identically apart from case, spaces after initials and Ё.
         public static string NameKey(string name) { return Regex.Replace(CleanName(name), @"\.\s+", ".").ToUpperInvariant().Replace('Ё', 'Е'); }
@@ -84,7 +91,8 @@ namespace ReviewMerge {
         public static string BoxListDisplay(string list) { return string.Join(", ", (list ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(BoxDisplay)); }
         public static bool PlainBoxNumber(object box) { bool valid; var list = ParseBoxes(box, out valid); return valid && list.Count == 1 && Regex.IsMatch(Text(box), @"^\d+(?:\.0+)?$"); }
 
-        // Volume: fragments and parts ("Фрагмент 2", "_фрагмент1", "_Часть1", "(Часть 6.2)"), changes ("_изм.1") and the ИУЛ ending ("-УЛ", "-ИУЛ") belong to one volume.
+        // Volume: fragments and parts ("Фрагмент 2", "_фрагмент1", "_Часть1", "(Часть 6.2)"), changes ("_изм.1") and the ИУЛ ending
+        // ("-УЛ", "-ИУЛ", also with an organization or number after it: "-УЛ-ГТСС1", "-УЛ-2") belong to one volume.
         static string FileStem(object file, object ext) {
             string name = XlsxReader.Normal(file), e = XlsxReader.Normal(ext).TrimStart('.');
             if (e != "" && name.EndsWith("." + e, StringComparison.Ordinal)) name = name.Substring(0, name.Length - e.Length - 1);
@@ -95,7 +103,7 @@ namespace ReviewMerge {
             for (int i = 0; i < 2; i++) {
                 name = Regex.Replace(name, @"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])(?:ФРАГМЕНТ|ЧАСТЬ)\s*(?:№|N)?\s*\d+(?:\.\d+)*(?:\s*ИЗ\s*\d+)?[\)\]]*", "");
                 name = Regex.Replace(name, @"[\(\[ _,\-]+ИЗМ[.\s]*\d+[\)\]]*$", "");
-                name = Regex.Replace(name, @"[-_ ]+[\(\[]?И?УЛ[\)\]]?$", "");
+                name = Regex.Replace(name, @"[-_ ]+[\(\[]?И?УЛ[\)\]]?(?:[-_ ]+[\p{L}\p{N}]+)?$", "");
             }
             return Regex.Replace(name, @"\s+", " ").Trim();
         }

@@ -352,8 +352,10 @@ def test_changed_dates_and_new_people():
     formulas=load_workbook(target);cached=load_workbook(target,data_only=True);ref=cached['Справка по томам']
     names={ref.cell(r,1).value for r in range(12,60,2)}-{None,''}
     assert {'Петрова Анна Ивановна','Сидоров Олег Петрович'}<=names and not names&{'Петрова А.И.','А.И. Петрова'},names
-    starts=[c.column for c in formulas['Справка по томам'][8] if isinstance(c.value,str) and 'AGGREGATE' in c.value]
+    sheet=formulas['Справка по томам'];h=next(c.column for c in sheet[1] if c.value=='ReviewMerge.FirstDates.v3')
+    starts=[c.column for c in sheet[8] if 1<c.column<h and c.value is not None]
     assert [ref.cell(8,c).value for c in starts]==[datetime(2026,10,1),datetime(2026,10,2),None,None],'Days are the dates of the main sheet plus spare days'
+    assert all(isinstance(sheet.cell(8,c).value,datetime) for c in starts[:2]) and all('ISNA(MATCH' in sheet.cell(8,c).value for c in starts[2:]),'Days of the build keep their dates'
     assert starts[1]-starts[0]==9 and ref.cell(12,starts[0]+8).value=='Записка Петровой','Seven box slots; the note of a merged row moves to its person'
     spare=[r for r in range(12,60,2) if 'AGGREGATE' in str(formulas['Справка по томам'].cell(r,1).value)]
     assert len(spare)==2 and all(ref.cell(r,1).value in (None,'') for r in spare),spare
@@ -367,6 +369,31 @@ def test_changed_dates_and_new_people():
     assert [ref.cell(8,c).value for c in starts[:3]]==[datetime(2026,10,1),datetime(2026,10,2),datetime(2026,10,3)]
     assert 'Новикова' in {ref.cell(r,1).value for r in range(12,60,2)}
     summary=cached['Свод'];assert [summary.cell(9,summary_column(summary,datetime(2026,10,d),5)).value for d in (1,2,4)]==[1,3,4]
+
+def test_names_suffixed_iul_inserted_rows():
+    temp=run_root/uuid.uuid4().hex;temp.mkdir()
+    docs=[{3:'Том А',9:'Иванов Алексей Андреевич',10:datetime(2026,10,2),12:1},{3:'Том А-УЛ-ГТСС1',12:1},{3:'Том Б',9:'Петров П.П.',10:datetime(2026,10,2),12:2},
+          {3:'Том В',9:'Петров П.П.',10:datetime(2026,10,2),12:'45 и 46'},{3:'Том Г',12:45}]
+    source=book(temp/'source.xlsx',docs)
+    target=book(temp/'svod.xlsx',[{3:d[3]} for d in docs],['Иванов Александр Александрович','Петров Пётр Петрович'])
+    report=run(target,[source],False,'--match-surnames')
+    merges=report['PeopleMerges']
+    assert any('Иванов Алексей Андреевич' in m and 'инициалы совпадают' not in m for m in merges),'Different full names with the same initials are asked about, not merged silently'
+    assert any('Петров П.П.' in m and 'инициалы совпадают' in m for m in merges),merges
+    assert any(b.startswith('Короб 1пд') for b in report['IncompleteBoxes']),'«Том А-УЛ-ГТСС1» is a part of «Том А»: the box is partly checked'
+    assert any(b.startswith('Короб 45пд') and 'Том Г' in b for b in report['IncompleteBoxes']),'A row of the list «45 и 46» belongs to box 45'
+    cached=load_workbook(target,data_only=True);summary=cached['Свод'];col=summary_column(summary,datetime(2026,10,4))
+    assert summary.cell(38,col).value==2,'«Том А» is not checked while its ИУЛ is not'
+    formulas=load_workbook(target);ref=formulas['Справка по томам']
+    h=next(c.column for c in ref[1] if c.value=='ReviewMerge.FirstDates.v3');days=[c for c in ref[8] if 1<c.column<h and c.value is not None]
+    assert isinstance(days[0].value,datetime) and all(str(c.value).startswith('=') and 'ISNA(MATCH' in c.value for c in days[1:]),'Days of the build keep their dates, spare days are formulas'
+    # Rows inserted in Excel above the totals: the new reviewer stays, the moved label is not a reviewer.
+    ref.insert_rows(42,2);ref['A42']='Зинзюк Евгений Анатольевич';formulas.save(target)
+    run(target,[source],False,'--match-surnames')
+    ref=load_workbook(target,data_only=True)['Справка по томам']
+    labels={r:ref.cell(r,1).value for r in range(12,60) if ref.cell(r,1).value}
+    assert labels.get(42)=='Зинзюк Евгений Анатольевич' and labels.get(44)=='ИТОГО проверено коробов' and labels.get(45)=='ИТОГО проверено томов',labels
+    assert sum(str(v).startswith('ИТОГО проверено коробов') for v in labels.values())==1,labels
 
 test_merge()
 test_existing_target()
@@ -383,5 +410,6 @@ test_marks_parts_and_wide_days()
 test_kind_table_and_notes()
 test_long_calendar_filter_duplicates()
 test_changed_dates_and_new_people()
-print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks, wide days, live dates and new reviewers')
+test_names_suffixed_iul_inserted_rows()
+print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks, wide days, live dates, new reviewers, names, suffixed IUL and inserted rows')
 

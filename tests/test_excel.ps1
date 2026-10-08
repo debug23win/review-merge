@@ -33,18 +33,20 @@ try {
     $bookCheck=$excelApp.Workbooks.Open((Join-Path $candidate.FullName 'result.xlsx'),0,$true)
     $summary=$bookCheck.Worksheets.Item('Свод');$main=$bookCheck.Worksheets.Item('Все загруженные файлы');$ref=$bookCheck.Worksheets.Item('Справка по томам')
     $excelApp.CalculateFullRebuild()
-    if($ref.Range('F48').Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Box with surname and date was not counted'}
-    if($ref.Range('F49').Value2 -ne ([datetime]'2026-10-03').ToOADate()){throw 'Earliest checked box date was incorrect'}
+    # The box table starts where the marker of the calculation columns says.
+    $marker=$ref.Range('1:1').Find('ReviewMerge.FirstDates.v3');$start=[int]$ref.Cells.Item(1,$marker.Column+3).Value2;$box1='F'+$start;$box2='F'+($start+1)
+    if($ref.Range($box1).Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Box with surname and date was not counted'}
+    if($ref.Range($box2).Value2 -ne ([datetime]'2026-10-03').ToOADate()){throw 'Earliest checked box date was incorrect'}
     if($summary.Range('B51').Value2 -ne 1 -or $summary.Range('B52').Value2 -ne 2){throw 'Volume statistics by surname were incorrect'}
     if($summary.Range('G52').Value2 -ne 1){throw 'Completed box by surname was incorrect'}
     $main.Range('I9').Value2='Анна';$main.Range('J9').Formula='=DATE(2026,10,4)'
     $excelApp.CalculateFullRebuild()
-    if($ref.Range('F48').Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Later review changed first box date'}
+    if($ref.Range($box1).Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Later review changed first box date'}
     if($summary.Range('B51').Value2 -ne 2){throw 'Newly reviewed volume was not counted'}
     $main.Range('I9').Value2='Борис';$excelApp.CalculateFullRebuild()
     if($summary.Range('B51').Value2 -ne 1 -or $summary.Range('B52').Value2 -ne 3){throw 'Surname edit did not update volume statistics'}
     $main.Range('L9').Formula='3';$excelApp.CalculateFullRebuild()
-    if($ref.Range('F48').Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Existing reviewed files must retain box review'}
+    if($ref.Range($box1).Value2 -ne ([datetime]'2026-10-02').ToOADate()){throw 'Existing reviewed files must retain box review'}
     if($bookCheck.Windows.Item(1).SelectedSheets.Count -ne 1){throw 'Grouped sheets remain'}
     Write-Output 'Excel tests passed: reference formulas, boxes with review data, volume statistics by surname and independent active sheet'
 } finally {

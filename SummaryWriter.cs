@@ -55,13 +55,26 @@ namespace ReviewMerge {
             for(int i=0;i<s.Length;i+=200)parts.Add("\""+s.Substring(i,Math.Min(200,s.Length-i)).Replace("\"","\"\"")+"\"");
             return parts.Count==0?"\"\"":string.Join("&",parts);
         }
-        // ";ПД|45;" from K and L of the main sheet. A list such as "45 и 46" keeps the boxes read at the build; another value is read as one number.
-        static string BoxListFormula(string kind,string box,object value,List<string> keys) {
-            string kindExpr="IF(TRIM("+kind+")=\"\",\"Не указан\",UPPER(TRIM("+kind+")))";
-            string single="IF(AND(IFERROR(VALUE("+box+"),0)>0,IFERROR(VALUE("+box+"),0)=INT(IFERROR(VALUE("+box+"),0))),\";\"&"+kindExpr+"&\"|\"&TEXT(VALUE("+box+"),\"0\")&\";\",\"\")";
-            if(keys.Count==0||Rules.PlainBoxNumber(value))return single;
-            string template=";"+string.Join(";",keys.Select(k=>"@"+k.Substring(k.IndexOf('|'))))+";";
-            return "IF(TRIM("+box+")="+Literal(Regex.Replace(Text(value)," +"," "))+",SUBSTITUTE("+Literal(template)+",\"@\","+kindExpr+"),"+single+")";
+        // ";ПД|45;" from K and L of the main sheet, kept live in Excel: a number, a list "45 и 46", "45, 46", "№45; №46" or a range "45-48".
+        // normal is L without words and signs ("45,46", "45-48"), item is ";ПД|" (";Не указан|" without a kind), numbers is the cell ";1;2;...;1000;":
+        // a range is cut out of it. A cell that mixes a list and a range ("45-47, 50") keeps the boxes read at the build while its text is unchanged.
+        static string BoxListFormula(string box,string normal,string item,string numbers,object value,List<string> keys) {
+            string list="SUBSTITUTE(SUBSTITUTE("+item+"&SUBSTITUTE("+normal+",\",\","+item+")&\";\","+item+"&\";\",\";\"),"+item+"&\"0;\",\";\")";
+            string first="LEFT("+normal+",FIND(\"-\","+normal+")-1)",last="MID("+normal+",FIND(\"-\","+normal+")+1,9)";
+            string from="FIND(\";\"&"+first+"&\";\","+numbers+")",to="FIND(\";\"&"+last+"&\";\","+numbers+")";
+            string range="IFERROR(IF(AND("+to+">="+from+","+last+"-"+first+"<"+Rules.MaxBoxesInCell+"),SUBSTITUTE(MID("+numbers+","+from+","+to+"-"+from+"+LEN("+last+")+1),\";\","+item+")&\";\",\"\"),\"\")";
+            string live="IF("+normal+"=\"\",\"\",IF(ISERROR(FIND(\"-\","+normal+")),"+list+",IF(ISERROR(FIND(\",\","+normal+")),"+range+",\"\")))";
+            if(keys.Count==0||Rules.PlainBoxNumber(value))return live;
+            string template=string.Concat(keys.Select(k=>"@"+k.Substring(k.IndexOf('|')+1)))+";";
+            return "IF(TRIM("+box+")="+Literal(Regex.Replace(Text(value)," +"," "))+",SUBSTITUTE("+Literal(template)+",\"@\","+item+"),"+live+")";
+        }
+        static readonly string[][] BoxSigns={new[]{"КОРОБА",""},new[]{"КОРОБ",""},new[]{"КОР.",""},new[]{"К.",""},new[]{"№",""},new[]{" И ",","},new[]{"И",","},new[]{";",","},new[]{"/",","},new[]{"–","-"},new[]{"—","-"},new[]{" ",""},new[]{",,",","}};
+        // L of the main sheet as "45,46" or "45-48": upper case, words "короб", "кор.", "к." and "№" removed, "и", ";", "/" read as commas.
+        static string BoxNormalFormula(string box) {
+            string f="UPPER("+box+"&\"\")";foreach(var pair in BoxSigns)f="SUBSTITUTE("+f+",\""+pair[0]+"\",\""+pair[1]+"\")";return f;
+        }
+        static string BoxNormal(object value) {
+            string t=(value is double?((double)value).ToString(Inv):Text(value)).ToUpperInvariant();foreach(var pair in BoxSigns)t=t.Replace(pair[0],pair[1]);return t;
         }
         static void MergeTitle(XDocument doc,int row,int end) {
             var merges=doc.Root.Element(N+"mergeCells");if(merges==null){merges=new XElement(N+"mergeCells");doc.Root.Element(N+"sheetData").AddAfterSelf(merges);}
@@ -101,14 +114,18 @@ namespace ReviewMerge {
             if(!reference) {g.Set(1,1,"СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ",defaults[8]);g.Heights[1]=30;g.Set(4,1,"Кол-во дней проверки:",defaults[8]);g.Set(5,1,"По состоянию на:",defaults[8]);}
             g.Set(1,h,CalculationMarker,bodyStyle);g.Set(1,h+1,asOf.ToOADate(),dateStyle);
             string[] helperNames={"Ключ короба","Проверяющий для статистики","Считается томом","Файл проверен","Дата для статистики","Есть замечания","Запись дня тома","Новый проверяющий","Вид документации","Проверяющий","Строка основного листа","Имя файла"};
-            for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);g.Set(6,h+25,"Новый короб",bodyStyle);
+            for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);g.Set(6,h+25,"Новый короб",bodyStyle);g.Set(6,h+30,"Номер короба без слов",bodyStyle);g.Set(6,h+48,"Начало ключа короба",bodyStyle);
+            // Box numbers 1-1000 in one cell: a range "45-48" is cut out of it.
+            string numbers="$"+MergeEngine.ExcelColumn(h+30)+"$2";g.Set(2,h+30,";"+string.Join(";",Enumerable.Range(1,1000))+";",bodyStyle);
             string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h),rawNames=LocalRange(h+9,7,last),boxLists=LocalRange(h,7,last);
             string knownNames=LocalRange(h+45,7,Math.Max(7,referenceLayout.NameTable.Count+6)),knownBoxes=LocalRange(h+44,referenceLayout.ManifestStart,Math.Max(referenceLayout.ManifestStart,referenceLayout.BoxEnd));
             var volumeKeys=result.Rows.Select(VolumeKey).ToList();
             for(int i=0;i<result.Rows.Count;i++) {
                 int rn=i+7,mr=rowNumbers[i];var row=result.Rows[i];string x=MergeEngine.ExcelColumn(h+3)+rn,rawRef=MergeEngine.ExcelColumn(h+9)+rn;
                 string kind=MainCell(name,"K",mr),box=MainCell(name,"L",mr),who=MainCell(name,"I",mr),file=MainCell(name,"C",mr),date=MainCell(name,"J",mr);
-                g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(kind,box,row.Values[11],keys[i]));
+                string normal=MergeEngine.ExcelColumn(h+30)+rn,item=MergeEngine.ExcelColumn(h+48)+rn,kindRef=MergeEngine.ExcelColumn(h+8)+rn;
+                g.Set(rn,h+30,BoxNormal(row.Values[11]),bodyStyle,BoxNormalFormula(box));g.Set(rn,h+48,";"+Rules.Kind(row.Values[10])+"|",bodyStyle,"IF(TRIM("+kindRef+")=\"\",\";Не указан|\",\";\"&UPPER(TRIM("+kindRef+"))&\"|\")");
+                g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(box,normal,item,numbers,row.Values[11],keys[i]));
                 g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+nameTable+",3,FALSE),"+rawRef+"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),INT("+date+"),\"\")");
