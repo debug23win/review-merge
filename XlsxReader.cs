@@ -17,7 +17,6 @@ namespace ReviewMerge {
         // Values as they are in the file when Values were interpreted (a mark "да" read as 1).
         public object[] Written;
         public object FirstDateSource;
-        public double? PriorFirstDate;
         public bool IsConsolidated;
     }
     public sealed class SourceBook {
@@ -90,23 +89,6 @@ namespace ReviewMerge {
             double number;if(type!="str"&&type!="e"&&double.TryParse(raw,NumberStyles.Float,Inv,out number))return number;
             return raw;
         }
-        static Dictionary<string,double> SummaryDates(ZipArchive zip,XDocument workbook,XDocument rels,IList<string> strings) {
-            var result=new Dictionary<string,double>(StringComparer.Ordinal);
-            foreach(var sheet in workbook.Root.Element(Ns+"sheets").Elements().Where(e=>new[]{"Свод","Справка по томам"}.Contains(((string)e.Attribute("name")??"").Trim(),StringComparer.OrdinalIgnoreCase))) {
-                string rid=(string)sheet.Attribute(Rel+"id");var rel=rels.Root.Elements().FirstOrDefault(e=>(string)e.Attribute("Id")==rid);
-                if(rel==null)continue;string path=((string)rel.Attribute("Target")).Replace('\\','/');path=path.StartsWith("/")?path.TrimStart('/') : "xl/"+path;
-                var doc=Load(zip,path);Rules.NumberCells(doc);var rows=doc.Descendants(Ns+"sheetData").Elements(Ns+"row").ToList();
-                var marker=rows.Where(e=>(int)e.Attribute("r")==1).Elements(Ns+"c").FirstOrDefault(e=>Text(RawValue(e,strings)).StartsWith("ReviewMerge.FirstDates.v",StringComparison.Ordinal));
-                if(marker==null)continue;int start=Column((string)marker.Attribute("r"));
-                foreach(var row in rows.Where(e=>(int)e.Attribute("r")>=7)) {
-                    string key=Text(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+7),strings));
-                    try{key=Encoding.UTF8.GetString(Convert.FromBase64String(key));}catch(FormatException){continue;}
-                    double? date=DateSerial(RawValue(row.Elements(Ns+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==start+6),strings));
-                    if(key!=""&&date.HasValue&&(!result.ContainsKey(key)||result[key]>date.Value))result[key]=date.Value;
-                }
-            }
-            return result;
-        }
         static int Column(string address) {
             int result = 0;
             foreach (char ch in address) { if (ch < 'A' || ch > 'Z') break; result = result * 26 + ch - 'A' + 1; }
@@ -134,7 +116,6 @@ namespace ReviewMerge {
                     strings.AddRange(Load(zip, "xl/sharedStrings.xml").Root.Elements(Ns + "si")
                         .Select(e => string.Concat(e.Descendants(Ns + "t").Select(t => t.Value))));
                 bool date1904 = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904") == "1";
-                var summaryDates=SummaryDates(zip,workbook,rels,strings);
                 var data = Load(zip, target);
                 Rules.NumberCells(data);
                 var all = new List<SourceRow>();
@@ -174,8 +155,6 @@ namespace ReviewMerge {
                     result.DataStart++;
                 foreach (var row in all.Where(r => r.Row >= result.DataStart)) {
                     row.IsConsolidated = knownFirstDate;
-                    if (knownFirstDate) row.PriorFirstDate = DateSerial(row.FirstDateSource);
-                    double prior;if(summaryDates.TryGetValue(Key(row),out prior))row.PriorFirstDate=row.PriorFirstDate.HasValue?Math.Min(prior,row.PriorFirstDate.Value):prior;
                     if (Text(row.Values[2]) != "") result.Rows.Add(row);
                     else if (row.Values.Skip(8).Any(v => Text(v) != "")) result.Orphans.Add(row);
                 }

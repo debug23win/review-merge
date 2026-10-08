@@ -22,7 +22,6 @@ namespace ReviewMerge {
     public sealed class MergedRow {
         public object[] Values;
         public SourceRow TargetRow;
-        public double? FirstReviewDate;
         public readonly List<SourceRow> Reviews = new List<SourceRow>();
         public readonly List<SourceRow> TargetDuplicates = new List<SourceRow>();
     }
@@ -42,6 +41,8 @@ namespace ReviewMerge {
         public bool CurrentDateForNewReviews, MatchSurnames;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
         public Func<string, string, bool> SamePerson;
+        // A saved answer for such a pair, if any: initials that agree merge people without a question unless the operator said "no" before.
+        public Func<string, string, bool?> SavedSamePerson;
         // A mark other than 1 or 0 in M:R ("да", "+", "х") and the number of cells with it; true turns it into 1.
         public Func<string, int, bool> ConvertMark;
         // Receives the partly checked boxes and returns those whose remaining rows are filled without remarks.
@@ -166,7 +167,6 @@ namespace ReviewMerge {
                 if (!XlsxReader.DateSerial(r.Values[9]).HasValue) r.Values[9] = date;
                 if (Txt(r.Values[10]) == "") r.Values[10] = source.Values[10];
                 if (Txt(r.Values[11]) == "") r.Values[11] = source.Values[11];
-                if (!r.FirstReviewDate.HasValue || r.FirstReviewDate.Value > date) r.FirstReviewDate = date;
                 result.FilledRows++;
             }
         }
@@ -197,9 +197,6 @@ namespace ReviewMerge {
                         merged = new MergedRow { Values = (object[])row.Values.Clone(), TargetRow = fi == 0 ? row : null };
                         byKey.Add(key, merged); result.Rows.Add(merged);
                     } else if (fi == 0 && merged.TargetRow != null) merged.TargetDuplicates.Add(row);
-                    double? actualDate = Txt(row.Values[8]) != "" ? XlsxReader.DateSerial(row.Values[9]) : null;
-                    double? firstDate = row.PriorFirstDate.HasValue && actualDate.HasValue ? Math.Min(row.PriorFirstDate.Value,actualDate.Value) : actualDate;
-                    if(firstDate.HasValue && (!merged.FirstReviewDate.HasValue || firstDate.Value < merged.FirstReviewDate.Value)) merged.FirstReviewDate=firstDate;
                     if (!HasReview(row)) continue;
                     result.History.Add(row); merged.Reviews.Add(row);
                     bool suppliedDate=currentDateForNewReviews&&Txt(row.Values[8])!=""&&!(existingTarget&&merged.TargetRow!=null&&Txt(merged.TargetRow.Values[8])!=""&&XlsxReader.DateSerial(merged.TargetRow.Values[9]).HasValue);
@@ -267,8 +264,8 @@ namespace ReviewMerge {
                     throw new InvalidDataException("Объединённый текст замечаний превышает предел ячейки Excel (32767 символов): " + Txt(merged.Values[2]) + ". Источники сохранены; сократите тексты перед повторной сборкой.");
                 if(currentDateForNewReviews&&Txt(merged.Values[8])!=""){
                     double? saved=existingTarget&&merged.TargetRow!=null&&Txt(merged.TargetRow.Values[8])!=""?XlsxReader.DateSerial(merged.TargetRow.Values[9]):null;
-                    if(saved.HasValue){merged.Values[9]=saved.Value;merged.FirstReviewDate=merged.TargetRow.PriorFirstDate.HasValue?Math.Min(saved.Value,merged.TargetRow.PriorFirstDate.Value):saved.Value;}
-                    else {double today=(importDate??DateTime.Today).Date.ToOADate();merged.Values[9]=today;merged.FirstReviewDate=today;result.DatesAssignedToday++;}
+                    if(saved.HasValue)merged.Values[9]=saved.Value;
+                    else {merged.Values[9]=(importDate??DateTime.Today).Date.ToOADate();result.DatesAssignedToday++;}
                 }
                 // A difference already taken into the consolidated book is not reported again on the next build.
                 var target = existingTarget ? merged.TargetRow : null;
@@ -297,7 +294,7 @@ namespace ReviewMerge {
             foreach (var row in result.Rows) {
                 if (Txt(row.Values[8]) != "") {
                     result.Reviewed++;
-                    double? d = row.FirstReviewDate ?? XlsxReader.DateSerial(row.Values[9]);
+                    double? d = XlsxReader.DateSerial(row.Values[9]);
                     if (d.HasValue && DateTime.FromOADate(d.Value) < min) min = DateTime.FromOADate(d.Value);
                 }
                 if (row.Values.Skip(12).Take(6).Any(v => Txt(v) != "" && Txt(v) != "0") || Txt(row.Values[18]) != "" || Txt(row.Values[19]) != "") result.WithIssues++;

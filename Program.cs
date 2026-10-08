@@ -96,7 +96,7 @@ namespace ReviewMerge {
             asOf.Format=DateTimePickerFormat.Custom;asOf.CustomFormat="dd.MM.yyyy";asOf.Dock=DockStyle.Fill;parameters.Controls.Add(asOf,3,0);content.Controls.Add(parameters,0,2);
             var settings=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=2,Margin=new Padding(0)};settings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             currentDate.Text="Ставить текущую дату новым проверенным томам";currentDate.AutoSize=true;currentDate.Anchor=AnchorStyles.Left;currentDate.Checked=UserSettings.GetFlag("CurrentDateForNewReviews",false);currentDate.CheckedChanged+=(s,e)=>{SaveFlag("CurrentDateForNewReviews",currentDate.Checked);UpdateRule();};settings.Controls.Add(currentDate,0,0);
-            matchSurnames.Text="Сопоставлять проверяющих по фамилии (спрашивать при каждом совпадении)";matchSurnames.AutoSize=true;matchSurnames.Anchor=AnchorStyles.Left;matchSurnames.Checked=UserSettings.GetFlag("MatchSurnames",true);matchSurnames.CheckedChanged+=(s,e)=>SaveFlag("MatchSurnames",matchSurnames.Checked);settings.Controls.Add(matchSurnames,0,1);
+            matchSurnames.Text="Сопоставлять проверяющих по фамилии (при совпадении инициалов — сразу, иначе спрашивать)";matchSurnames.AutoSize=true;matchSurnames.Anchor=AnchorStyles.Left;matchSurnames.Checked=UserSettings.GetFlag("MatchSurnames",true);matchSurnames.CheckedChanged+=(s,e)=>SaveFlag("MatchSurnames",matchSurnames.Checked);settings.Controls.Add(matchSurnames,0,1);
             forgetNames.AutoSize=true;forgetNames.Anchor=AnchorStyles.Left;forgetNames.Margin=new Padding(18,3,0,0);forgetNames.LinkClicked+=(s,e)=>{if(MessageBox.Show(this,"Забыть сохранённые ответы о совпадающих фамилиях и отметках «да», «+», «х»? При следующей сборке программа спросит снова.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;try{UserSettings.ForgetAnswers();}catch(Exception ex){Append("Не удалось сбросить ответы: "+ex.Message);}RefreshForget();};settings.Controls.Add(forgetNames,1,1);RefreshForget();
             content.Controls.Add(settings,0,3);
             rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);UpdateRule();content.Controls.Add(rule,0,4);
@@ -156,7 +156,7 @@ namespace ReviewMerge {
             try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
             var selected=paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
-            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark};
+            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark};
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append("Начата сборка "+selected.Count+" файлов.");
             var worker=new Thread(()=> {
                 try {
