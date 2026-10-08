@@ -354,5 +354,5 @@ test_filled_rows_keep_reviewer_and_box()
 test_marks_parts_and_wide_days()
 test_kind_table_and_notes()
 test_long_calendar_filter_duplicates()
-print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, incomplete volumes and ИУЛ')
+print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks and wide days')
 
