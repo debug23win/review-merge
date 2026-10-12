@@ -23,6 +23,14 @@ namespace ReviewMerge {
         XDocument book,rels,types,styles;
         int bodyStyle,headStyle,dateStyle,dateHeadStyle,intStyle,percentStyle,titleStyle,noteStyle;
         readonly Dictionary<int,int> mainDateStyles=new Dictionary<int,int>();
+        readonly Dictionary<int,int> mainTextStyles=new Dictionary<int,int>();
+        RegisterColumns mainColumns;
+        int MainTextStyle(int original) {
+            int id;if(mainTextStyles.TryGetValue(original,out id))return id;
+            var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(original));
+            xf.SetAttributeValue("numFmtId",49);xf.SetAttributeValue("applyNumberFormat",1);
+            id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);mainTextStyles[original]=id;return id;
+        }
         int MainDateStyle(int original) {
             int id;if(mainDateStyles.TryGetValue(original,out id))return id;
             var xfs=styles.Root.Element(N+"cellXfs");var source=xfs.Elements().ElementAt(original);var xf=new XElement(source);xf.SetAttributeValue("numFmtId",(int)xfs.Elements().ElementAt(dateStyle).Attribute("numFmtId"));xf.SetAttributeValue("applyNumberFormat",1);id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);mainDateStyles[original]=id;return id;
@@ -125,7 +133,7 @@ namespace ReviewMerge {
             using(var s=File.OpenRead(firstFile))using(var z=new ZipArchive(s,ZipArchiveMode.Read))foreach(var e in z.Entries){using(var m=new MemoryStream())using(var es=e.Open()){es.CopyTo(m);entries[e.FullName]=m.ToArray();}}
             book=Xml("xl/workbook.xml");rels=Xml("xl/_rels/workbook.xml.rels");types=Xml("[Content_Types].xml");
             var pr=book.Root.Element(N+"workbookPr");if(pr!=null && ((string)pr.Attribute("date1904")=="1" || (string)pr.Attribute("date1904")=="true"))throw new InvalidDataException("Первый файл использует систему дат 1904. Выберите первым файл с системой дат 1900.");
-            SetupStyles();mainPath=PathFor(mainName);var main=Xml(mainPath);string actualName=(string)book.Root.Element(N+"sheets").Elements().First(e=>PathFor((string)e.Attribute("name"))==mainPath).Attribute("name");
+            SetupStyles();mainColumns=result.Columns;mainPath=PathFor(mainName);var main=Xml(mainPath);string actualName=(string)book.Root.Element(N+"sheets").Elements().First(e=>PathFor((string)e.Attribute("name"))==mainPath).Attribute("name");
             int first=result.StartRow;var data=main.Root.Element(N+"sheetData");
             var existing=data.Elements(N+"row").ToDictionary(e=>(int)e.Attribute("r"));
             int next=Math.Max(first-1,existing.Keys.DefaultIfEmpty(first-1).Max())+1;
@@ -133,8 +141,9 @@ namespace ReviewMerge {
             int last=Math.Max(existing.Keys.DefaultIfEmpty(first).Max(),rowNumbers.DefaultIfEmpty(first).Max());
             if(last>1048576)throw new InvalidDataException("В сводном документе недостаточно свободных строк Excel для новых документов.");
             string[] legacyHeaders={"Ключ короба (формула)","Первая строка короба","Первая проверка короба","Документ проверен","Дата для статистики","Есть замечания","Первая дата из источников"};
-            bool ourHelpers=Enumerable.Range(0,7).All(i=>Text(Value(At(main,result.HeaderRow,21+i)))==legacyHeaders[i]);
-            if(ourHelpers) RemoveLegacyHelpers(main);
+            bool ourHelpers=Enumerable.Range(0,7).All(i=>Text(Value(At(main,result.HeaderRow,mainColumns.Count+1+i)))==legacyHeaders[i]);
+            if(ourHelpers) RemoveLegacyHelpers(main,mainColumns.Count+1);
+            if(mainColumns.HasVolumeNumber) FormatVolumeColumn(main,first);
             var sourceStyles=new Dictionary<int,int>();
             var sample=data.Elements(N+"row").FirstOrDefault(e=>(int)e.Attribute("r")==first);
             if(sample!=null)foreach(var c in sample.Elements(N+"c")){int col=Column((string)c.Attribute("r"));sourceStyles[col]=(int?)c.Attribute("s")??0;}
@@ -151,10 +160,10 @@ namespace ReviewMerge {
                 // A document repeated in the consolidated book gets the same review data in every repeated row.
                 foreach(var copy in row.TargetDuplicates){XElement other;if(existing.TryGetValue(copy.Row,out other))WriteMainRow(other,copy.Row,true,row,copy,sourceStyles);}
             }
-            int maxCol=Math.Max(20,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(20).Max());
+            int maxCol=Math.Max(mainColumns.Count,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(mainColumns.Count).Max());
             var dimension=main.Root.Element(N+"dimension");if(dimension==null){dimension=new XElement(N+"dimension");var sheetPr=main.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else main.Root.AddFirst(dimension);}dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(maxCol)+last);
             var filter=main.Root.Element(N+"autoFilter");
-            if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(20,Column(right)))+last);}
+            if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(mainColumns.Count,Column(right)))+last);}
             Store(mainPath,main);progress(65,"Данные проверки объединены. Статистика рассчитывается на листе «Свод»");
             RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags);
             Finish(output,result,asOf,progress,token);
@@ -164,16 +173,36 @@ namespace ReviewMerge {
             int noteLines=Math.Max(Text(row.Values[18]).Split('\n').Length,Text(row.Values[19]).Split('\n').Length);
             bool notesChanged=!keep||previous==null||Text(previous[18])!=Text(row.Values[18])||Text(previous[19])!=Text(row.Values[19]);
             if(noteLines>1&&notesChanged){xmlrow.SetAttributeValue("ht",Math.Min(120,Math.Max(30,noteLines*15)));xmlrow.SetAttributeValue("customHeight",1);}
-            for(int col=keep?9:1;col<=20;col++){
+            for(int logical=keep?9:1;logical<=20;logical++){
+                int col=mainColumns.Physical(logical);
                 var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);
-                if(col!=10&&keep&&previous!=null&&Text(previous[col-1])==Text(row.Values[col-1]))continue;
+                if(logical!=10&&keep&&previous!=null&&Text(previous[logical-1])==Text(row.Values[logical-1]))continue;
                 int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
-                if(old==null){if(col==10)style=dateStyle;if(col>=13&&col<=18)style=intStyle;if(col>=19)style=noteStyle;}
-                object value=row.Values[col-1];if(col==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous[col-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
+                if(old==null){if(logical==10)style=dateStyle;if(logical>=13&&logical<=18)style=intStyle;if(logical>=19)style=noteStyle;}
+                object value=row.Values[logical-1];if(logical==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous[logical-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
                 SetCell(xmlrow,Cell(rn,col,value,style));
+            }
+            if(mainColumns.HasVolumeNumber) {
+                var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==13);
+                int style=MainTextStyle(old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(13)?sourceStyles[13]:bodyStyle);
+                if(old!=null&&old.Element(N+"f")!=null&&source!=null&&Text(source.VolumeNumber)==Text(row.VolumeNumber))old.SetAttributeValue("s",style);
+                else SetCell(xmlrow,Cell(rn,13,row.VolumeNumber,style));
             }
             /* Calculation cells belong on the reference sheet, outside the main register. */
             var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
+        }
+        void FormatVolumeColumn(XDocument main,int first) {
+            var cols=main.Root.Element(N+"cols");
+            if(cols==null){cols=new XElement(N+"cols");main.Root.Element(N+"sheetData").AddBeforeSelf(cols);}
+            var current=cols.Elements(N+"col").FirstOrDefault(c=>(int)c.Attribute("min")<=13&&(int)c.Attribute("max")>=13);
+            var volume=current==null?Col(13,13,14):new XElement(current);
+            if(current!=null){int min=(int)current.Attribute("min"),max=(int)current.Attribute("max");
+                if(min<13){var left=new XElement(current);left.SetAttributeValue("max",12);current.AddBeforeSelf(left);}
+                if(max>13){var right=new XElement(current);right.SetAttributeValue("min",14);current.AddAfterSelf(right);}current.Remove();}
+            volume.SetAttributeValue("min",13);volume.SetAttributeValue("max",13);volume.SetAttributeValue("style",MainTextStyle((int?)volume.Attribute("style")??0));cols.Add(volume);
+            var sorted=cols.Elements().OrderBy(c=>(int)c.Attribute("min")).ToList();sorted.Remove();cols.Add(sorted);
+            foreach(var cell in main.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>(int)r.Attribute("r")>=first).Elements(N+"c").Where(c=>Column((string)c.Attribute("r"))==13))
+                cell.SetAttributeValue("s",MainTextStyle((int?)cell.Attribute("s")??0));
         }
         void Finish(string output,MergeResult result,DateTime asOf,Action<int,string> progress,CancellationToken token) {
             // Excel recalculates on open; a stored forced full calculation would recalculate the whole book after every edit.

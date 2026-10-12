@@ -10,6 +10,16 @@ using System.Xml;
 using System.Xml.Linq;
 
 namespace ReviewMerge {
+    // Values use the original logical A:T schema internally. Only worksheet addresses
+    // shift when the optional text field is present after the box column.
+    public sealed class RegisterColumns {
+        public bool HasVolumeNumber;
+        public int Count { get { return HasVolumeNumber ? 21 : 20; } }
+        public int Physical(int logical) { return logical >= 13 && HasVolumeNumber ? logical + 1 : logical; }
+        public string Letter(int logical) { return MergeEngine.ExcelColumn(Physical(logical)); }
+        public string Marks { get { return Letter(13) + ":" + Letter(18); } }
+        public string Notes { get { return Letter(19) + ":" + Letter(20); } }
+    }
     public sealed class SourceRow {
         public int Row;
         public string File;
@@ -18,10 +28,13 @@ namespace ReviewMerge {
         public object[] Written;
         public object FirstDateSource;
         public bool IsConsolidated;
+        public string VolumeNumber;
+        public RegisterColumns Columns;
     }
     public sealed class SourceBook {
         public string Path;
         public int HeaderRow, DataStart;
+        public RegisterColumns Columns;
         public readonly List<SourceRow> Rows = new List<SourceRow>();
         public readonly List<SourceRow> Orphans = new List<SourceRow>();
     }
@@ -122,10 +135,10 @@ namespace ReviewMerge {
                 foreach (var xmlRow in data.Descendants(Ns + "sheetData").Elements(Ns + "row")) {
                     int rn;
                     if (!int.TryParse((string)xmlRow.Attribute("r"), out rn)) continue;
-                    var row = new SourceRow { Row = rn, File = path };
+                    var row = new SourceRow { Row = rn, File = path, Values = new object[28] };
                     foreach (var cell in xmlRow.Elements(Ns + "c")) {
                         int col = Column((string)cell.Attribute("r") ?? "");
-                        if (col < 1 || (col > 20 && col != 27)) continue;
+                        if (col < 1 || col > 28) continue;
                         string type = (string)cell.Attribute("t");
                         string raw = (string)cell.Element(Ns + "v");
                         object value = null;
@@ -136,18 +149,26 @@ namespace ReviewMerge {
                             double n;
                             value = type != "str" && type != "e" && double.TryParse(raw, NumberStyles.Float, Inv, out n) ? (object)n : raw;
                         }
-                        if (date1904 && (col == 6 || col == 10 || col == 27) && value is double) value = (double)value + 1462;
-                        if (col == 27) row.FirstDateSource = value;
-                        else row.Values[col - 1] = value;
+                        if (date1904 && (col == 6 || col == 10 || col == 27 || col == 28) && value is double) value = (double)value + 1462;
+                        row.Values[col - 1] = value;
                     }
                     all.Add(row);
                 }
                 var header = all.FirstOrDefault(r => r.Row <= 30 && Normal(r.Values[8]) == "ПРОВЕРИЛ" && Normal(r.Values[9]).Contains("ДАТА"));
                 if (header == null || !Normal(header.Values[2]).Contains("ФАЙЛ") || !Normal(header.Values[7]).Contains("КОНТРОЛЬ"))
-                    throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": не совпадает структура A:T листа замечаний.");
+                    throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": не совпадает структура основного листа замечаний.");
                 result.HeaderRow = header.Row;
-                if (Normal(header.Values[11]) != "КОРОБ" || !Normal(header.Values[18]).Contains("ОПИСИ") || !Normal(header.Values[19]).Contains("ПРИМЕЧАН"))
-                    throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": столбцы I:T не соответствуют таблице проверки.");
+                string volumeHeader = Normal(header.Values[12]).Replace(" ", "");
+                result.Columns = new RegisterColumns { HasVolumeNumber = volumeHeader == "НОМЕРТОМА" || volumeHeader == "№ТОМА" };
+                if (Normal(header.Values[11]) != "КОРОБ" || !Normal(header.Values[result.Columns.Physical(19)-1]).Contains("ОПИСИ") || !Normal(header.Values[result.Columns.Physical(20)-1]).Contains("ПРИМЕЧАН"))
+                    throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": после «Короб» допускается «Номер тома», затем шесть отметок, ошибки в описи и примечание.");
+                foreach (var row in all) {
+                    var raw = row.Values;
+                    row.Columns = result.Columns;
+                    row.VolumeNumber = result.Columns.HasVolumeNumber ? Text(raw[12]) : null;
+                    row.FirstDateSource = raw[result.Columns.Count + 6];
+                    row.Values = Enumerable.Range(1,20).Select(c => raw[result.Columns.Physical(c)-1]).ToArray();
+                }
                 bool knownFirstDate = Normal(header.FirstDateSource) == "ПЕРВАЯ ДАТА ИЗ ИСТОЧНИКОВ";
                 result.DataStart = header.Row + 1;
                 var next = all.FirstOrDefault(r => r.Row == result.DataStart);

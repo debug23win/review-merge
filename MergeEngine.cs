@@ -21,6 +21,7 @@ namespace ReviewMerge {
     }
     public sealed class MergedRow {
         public object[] Values;
+        public string VolumeNumber;
         public SourceRow TargetRow;
         public readonly List<SourceRow> Reviews = new List<SourceRow>();
         public readonly List<SourceRow> TargetDuplicates = new List<SourceRow>();
@@ -61,6 +62,7 @@ namespace ReviewMerge {
         public readonly List<string> PeopleMerges = new List<string>();
         public readonly List<string> ConvertedMarks = new List<string>();
         public int StartRow, HeaderRow;
+        public RegisterColumns Columns;
     }
     public static class MergeEngine {
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -70,7 +72,7 @@ namespace ReviewMerge {
         static void AddProblem(MergeResult r, SourceRow row, string detail) {
             r.Problems.Add(new Problem { File = row.File, Row = row.Row, Document = Txt(row.Values[2]), Detail = detail });
         }
-        static bool HasReview(SourceRow r) { return r.Values.Skip(8).Any(v => Txt(v) != ""); }
+        static bool HasReview(SourceRow r) { return r.Values.Skip(8).Any(v => Txt(v) != "") || Txt(r.VolumeNumber) != ""; }
         static object Flag(object value) {
             string s = Txt(value);
             if (s == "") return null;
@@ -183,7 +185,7 @@ namespace ReviewMerge {
                 Check(token);
                 progress((int)(40.0 * fi / files.Count), "Чтение " + Path.GetFileName(files[fi]));
                 SourceBook source = XlsxReader.Read(files[fi], sheetName);
-                if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; }
+                if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; result.Columns = source.Columns; }
                 foreach (var orphan in source.Orphans) {
                     result.History.Add(orphan);
                     AddProblem(result, orphan, "Есть данные проверки, но нет названия документа. В сводном документе такая строка сохраняется на месте; строка из другого источника не переносится без идентификации документа. В статистику документов не включена.");
@@ -196,7 +198,7 @@ namespace ReviewMerge {
                     if (Txt(row.Values[7]) == "" && HasReview(row)) AddProblem(result, row, "Не указана контрольная сумма: идентификация выполнена по остальным реквизитам.");
                     MergedRow merged;
                     if (!byKey.TryGetValue(key, out merged)) {
-                        merged = new MergedRow { Values = (object[])row.Values.Clone(), TargetRow = fi == 0 ? row : null };
+                        merged = new MergedRow { Values = (object[])row.Values.Clone(), VolumeNumber = row.VolumeNumber, TargetRow = fi == 0 ? row : null };
                         byKey.Add(key, merged); result.Rows.Add(merged);
                     } else if (fi == 0 && merged.TargetRow != null) merged.TargetDuplicates.Add(row);
                     if (!HasReview(row)) continue;
@@ -221,7 +223,7 @@ namespace ReviewMerge {
                 var cells = g.ToList(); string shown = Txt(cells[0].Key.Values[cells[0].Value]);
                 bool toOne = options.ConvertMark != null && options.ConvertMark(shown, cells.Count);
                 foreach (var m in cells) {
-                    if (!toOne) { AddProblem(result, m.Key, "Недопустимая отметка в " + ExcelColumn(m.Value + 1) + ": «" + Txt(m.Key.Values[m.Value]) + "». Допустимы 1, 0 или пусто."); continue; }
+                    if (!toOne) { AddProblem(result, m.Key, "Недопустимая отметка в " + m.Key.Columns.Letter(m.Value + 1) + ": «" + Txt(m.Key.Values[m.Value]) + "». Допустимы 1, 0 или пусто."); continue; }
                     if (m.Key.Written == null) m.Key.Written = (object[])m.Key.Values.Clone();
                     m.Key.Values[m.Value] = 1.0;
                 }
@@ -231,6 +233,12 @@ namespace ReviewMerge {
                 Check(token);
                 var reviews = merged.Reviews;
                 if (reviews.Count == 0) { for (int k=8;k<20;k++) merged.Values[k]=null; continue; }
+                var numbered = reviews.Where(r => Txt(r.VolumeNumber) != "").ToList();
+                merged.VolumeNumber = existingTarget && merged.TargetRow != null && Txt(merged.TargetRow.VolumeNumber) != "" ? merged.TargetRow.VolumeNumber : numbered.Count == 0 ? null : Latest(numbered).VolumeNumber;
+                if (!result.Columns.HasVolumeNumber && Txt(merged.VolumeNumber) != "")
+                    throw new InvalidDataException("В источнике заполнен «Номер тома», а в сводном документе этого столбца нет. Добавьте «Номер тома» сразу после «Короб»: данные не записаны и не потеряны.");
+                if (numbered.Select(r => r.VolumeNumber).Distinct(StringComparer.Ordinal).Count() > 1)
+                    result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = "M — Номер тома", Details = string.Join("\n",numbered.Select(r => Path.GetFileName(r.File) + ", строка " + r.Row + ": " + r.VolumeNumber)), Decision = "Заполненный номер сводного документа сохранён; иначе выбран номер последнего датированного источника. Требуется сверка." });
                 var named = reviews.Where(r => Txt(r.Values[8]) != "").ToList();
                 SourceRow winner = Latest(named.Count > 0 ? named : reviews);
                 merged.Values[8] = Txt(winner.Values[8]) == "" ? null : Txt(winner.Values[8]);
@@ -249,7 +257,7 @@ namespace ReviewMerge {
                     var flags = reviews.Select(r => Flag(r.Values[col])).ToList();
                     merged.Values[col] = flags.Any(v => v is double && (double)v == 1) ? (object)1.0 : flags.FirstOrDefault(v => v != null);
                 }
-                // Fields already filled in the consolidated book stay as they are: re-sent files update only the fields right of the box (M:T).
+                // Fields already filled in the consolidated book stay as they are.
                 var kept = existingTarget ? merged.TargetRow : null;
                 if (kept != null && Txt(kept.Values[8]) != "") {
                     merged.Values[8] = Txt(kept.Values[8]);
@@ -277,11 +285,11 @@ namespace ReviewMerge {
                     var distinct = active.Select(r => col == 9 ? Pretty(col,r.Values[col]) : XlsxReader.Normal(col >=12 && col<18 ? Flag(r.Values[col]) : r.Values[col])).Distinct().ToList();
                     if (distinct.Count < 2) continue;
                     if (target != null && active.Contains(target) && active.Where(r => r != target).All(r => Contained(col, r.Values[col], target.Values[col]))) continue;
-                    string decision = col <= 11 && target != null && Txt(target.Values[col <= 9 ? 8 : col]) != "" ? "Значение сводного документа сохранено: из присланных файлов обновляются только отметки и замечания (M:T)." :
+                    string decision = col <= 11 && target != null && Txt(target.Values[col <= 9 ? 8 : col]) != "" ? "Значение сводного документа сохранено: из присланных файлов обновляются только отметки и замечания ("+result.Columns.Letter(13)+":"+result.Columns.Letter(20)+")." :
                         col == 8 || col == 9 ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                         col == 10 || col == 11 ? "Первое непустое значение в порядке файлов; требуется сверка реквизитов." :
                         col < 18 ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные исходные тексты объединены без добавления фамилий и дат.";
-                    result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = ExcelColumn(col+1) + " — " + Fields[col-8],
+                    result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = result.Columns.Letter(col+1) + " — " + Fields[col-8],
                         Details = string.Join("\n",active.Select(r => SourceDescription(r,col))), Decision = decision });
                 }
             }

@@ -20,13 +20,14 @@ namespace ReviewMerge {
         }
         static XElement At(XDocument sheet,int row,int col) {return sheet==null?null:sheet.Root.Element(N+"sheetData").Elements(N+"row").Where(e=>(int)e.Attribute("r")==row).Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==col);}
         int StyleAt(XDocument sheet,int row,int col,int fallback) {var c=At(sheet,row,col);return c==null?fallback:(int?)c.Attribute("s")??fallback;}
-        void RemoveLegacyHelpers(XDocument main) {
-            main.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c").Where(e=>Column((string)e.Attribute("r"))>=21&&Column((string)e.Attribute("r"))<=27).Remove();
+        void RemoveLegacyHelpers(XDocument main,int first) {
+            int last=first+6;
+            main.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c").Where(e=>Column((string)e.Attribute("r"))>=first&&Column((string)e.Attribute("r"))<=last).Remove();
             var cols=main.Root.Element(N+"cols");if(cols==null)return;
-            foreach(var c in cols.Elements().Where(e=>(int)e.Attribute("max")>=21&&(int)e.Attribute("min")<=27).ToList()) {
+            foreach(var c in cols.Elements().Where(e=>(int)e.Attribute("max")>=first&&(int)e.Attribute("min")<=last).ToList()) {
                 int min=(int)c.Attribute("min"),max=(int)c.Attribute("max");
-                if(max>27){var tail=new XElement(c);tail.SetAttributeValue("min",28);c.AddAfterSelf(tail);}
-                if(min<21)c.SetAttributeValue("max",20);else c.Remove();
+                if(max>last){var tail=new XElement(c);tail.SetAttributeValue("min",last+1);c.AddAfterSelf(tail);}
+                if(min<first)c.SetAttributeValue("max",first-1);else c.Remove();
             }
         }
         int SummaryStyle(int font,int fill,int num,int border,bool left) {
@@ -92,6 +93,9 @@ namespace ReviewMerge {
         void WriteCurrentSummary(string name,MergeResult result,DateTime asOf,List<int> rowNumbers,List<List<string>> keys,List<double?> dates,List<int> issues,List<int> checked_) {
             string oldPath=PathFor("Свод");XDocument previous=oldPath==null?null:Xml(oldPath);
             bool reference=previous!=null&&XlsxReader.Normal(Value(At(previous,7,1))).Contains("ПОЛУЧЕНО КОРОБ")&&XlsxReader.Normal(Value(At(previous,8,1))).Contains("ТОМОВ ПО АКТУ");
+            bool formatted=previous!=null&&previous.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>(int)r.Attribute("r")<=10).Any(r=>
+                XlsxReader.Normal(Value(r.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==1)))=="ЭТАП"&&
+                XlsxReader.Normal(Value(r.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==2))).Contains("ДАТА"));
             var calendar=new List<double>();
             if(reference)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Where(e=>(int)e.Attribute("r")==5).Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r")))) {
                 if(Column((string)cell.Attribute("r"))<2)continue;double? d=XlsxReader.DateSerial(Value(cell));if(d.HasValue)calendar.Add(d.Value);
@@ -136,15 +140,16 @@ namespace ReviewMerge {
                 g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+nameTable+",3,FALSE),"+rawRef+"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),INT("+date+"),\"\")");
-                g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+MainCell(name,"M",mr)+":R"+mr+",1)>0,COUNTIF("+MainCell(name,"M",mr)+":R"+mr+",\"?*\")>0,"+MainCell(name,"S",mr)+"<>\"\","+MainCell(name,"T",mr)+"<>\"\"),1,0)");
+                string marks=MainCell(name,mainColumns.Letter(13),mr)+":"+mainColumns.Letter(18)+mr;
+                g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+marks+",1)>0,COUNTIF("+marks+",\"?*\")>0,"+MainCell(name,mainColumns.Letter(19),mr)+"<>\"\","+MainCell(name,mainColumns.Letter(20),mr)+"<>\"\"),1,0)");
                 // Reviewers and boxes typed in the main sheet after the build: the first row of each that the reference sheet does not list yet.
                 string boxRef=MergeEngine.ExcelColumn(h)+rn;
                 g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+rawRef+")>0,0,IF(MATCH("+rawRef+","+rawNames+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+25,0,intStyle,"IF(OR("+boxRef+"=\"\",LEN("+boxRef+")-LEN(SUBSTITUTE("+boxRef+",\";\",\"\"))<>2),0,IF(COUNTIF("+knownBoxes+","+boxRef+")>0,0,IF(MATCH("+boxRef+","+boxLists+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+28,volumeKeys[i],bodyStyle);
                 // A filled S or T field is one remark, however many items its text has.
-                for(int t=0;t<2;t++){string source=MainCell(name,t==0?"S":"T",mr);g.Set(rn,h+23+t,Text(row.Values[18+t])!=""?1:0,intStyle,"IF(LEN(TRIM("+source+"))>0,1,0)");}
-                for(int t=0;t<6;t++)g.Set(rn,h+31+t,Text(row.Values[12+t])=="1"?1:0,intStyle,"IF(COUNTIF("+MainCell(name,MergeEngine.ExcelColumn(13+t),mr)+",1)>0,1,0)");
+                for(int t=0;t<2;t++){string source=MainCell(name,mainColumns.Letter(19+t),mr);g.Set(rn,h+23+t,Text(row.Values[18+t])!=""?1:0,intStyle,"IF(LEN(TRIM("+source+"))>0,1,0)");}
+                for(int t=0;t<6;t++)g.Set(rn,h+31+t,Text(row.Values[12+t])=="1"?1:0,intStyle,"IF(COUNTIF("+MainCell(name,mainColumns.Letter(13+t),mr)+",1)>0,1,0)");
                 g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+kind+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,"IF(TRIM("+who+")=\"\",\"\",TRIM("+who+"))");g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
             }
             var volumes=referenceLayout.VolumeGroups;
@@ -169,11 +174,17 @@ namespace ReviewMerge {
             }
             int vlast=volumes.Count+6;
             string xr=LocalRange(h+3,7,last),zr=LocalRange(h+5,7,last),cr=LocalRange(h+11,7,last),vdr=LocalRange(vh+1,7,vlast),vir=LocalRange(vh+2,7,vlast),isv=","+LocalRange(h+2,7,vlast)+",1";
+            if(formatted) {
+                WriteReference(g,h,previous.Root.Element(N+"sheetData").Elements(N+"row").Select(r=>(int)r.Attribute("r")).DefaultIfEmpty(1).Max());
+                RefreshFormattedSummary(previous,h,last,vlast);
+                PutSheet("Свод",previous);
+                return;
+            }
             g.Set(20,1,"СТАТИСТИКА ПО ОСНОВНОМУ ЛИСТУ",defaults[8]);g.Heights[20]=24;
             g.Set(21,1,"Показатель",greenLabel);g.Set(22,1,"Файлов в реестре",label);g.Set(23,1,"Проверено файлов нарастающим итогом",greenLabel);g.Set(24,1,"Проверено томов (фрагменты и ИУЛ объединены)",greenLabel);g.Set(25,1,"Проверенных файлов с замечаниями",label);g.Set(26,1,"Проверенных томов с замечаниями",label);g.Set(27,1,"Впервые проверено файлов за сутки",label);g.Set(28,1,"Впервые проверено томов за сутки",label);
             g.Set(30,1,"КОЛИЧЕСТВО ЗАМЕЧАНИЙ ПО ТИПАМ",defaults[8]);g.Heights[30]=24;g.Set(31,1,"Тип замечания",greenLabel);
             for(int t=0;t<8;t++)g.Set(32+t,1,typeNames[t],label);g.Set(40,1,"Всего отметок и текстовых замечаний",greenLabel);g.Set(41,1,"Томов с любыми замечаниями",orangeLabel);
-            g.Set(42,1,"Замечания считаются по томам: отметка M:R или заполненное поле S:T в любой части тома — одно замечание этого типа. ИУЛ без основного файла томом не считается.",noteStyle);g.Heights[42]=32;
+            g.Set(42,1,"Замечания считаются по томам: отметка "+mainColumns.Marks+" или заполненное поле "+mainColumns.Notes+" в любой части тома — одно замечание этого типа. ИУЛ без основного файла томом не считается.",noteStyle);g.Heights[42]=32;
             for(int i=0;i<calendar.Count;i++) {
                 int c=i+2;double serial=calendar[i];string cs=MergeEngine.ExcelColumn(c),d=cs+"$5",criteria=",\">0\","+yr+",\"<=\"&"+d,vc=",\">0\","+vdr+",\"<=\"&"+d;bool future=serial>asOf.ToOADate();
                 g.Set(21,c,serial,StyleAt(previous,5,c,defaults[6]));g.Set(31,c,serial,StyleAt(previous,5,c,defaults[6]));
@@ -226,6 +237,42 @@ namespace ReviewMerge {
             var names=book.Root.Element(N+"definedNames");if(names==null){names=new XElement(N+"definedNames");var calc=book.Root.Element(N+"calcPr");if(calc!=null)calc.AddBeforeSelf(names);else book.Root.Add(names);}
             names.Elements().Where(e=>(string)e.Attribute("name")=="_xlnm.Print_Area"&&(int?)e.Attribute("localSheetId")==sheetIndex).Remove();
             names.Add(new XElement(N+"definedName",new XAttribute("name","_xlnm.Print_Area"),new XAttribute("localSheetId",sheetIndex),"'Свод'!$A$1:$"+MergeEngine.ExcelColumn(g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(end).Max())+"$"+g.Rows.Keys.Max()));
+        }
+        // The user's transposed report is a template: update its links, retaining its
+        // cells, styles, dates, outlines, page breaks, print areas and alternative views.
+        void RefreshFormattedSummary(XDocument doc,int h,int fileLast,int volumeLast) {
+            var layout=referenceLayout;int oldH=layout.OldHelper;
+            if(oldH==0)throw new System.IO.InvalidDataException("В оформленном «Своде» не найдены исходные формулы «Справки по томам». Сводный документ не изменён.");
+            var old=layout.Previous;
+            var oldRows=old.Root.Element(N+"sheetData").Elements(N+"row").ToList();
+            Func<int,int> last=col=>oldRows.Where(r=>r.Elements(N+"c").Any(c=>Column((string)c.Attribute("r"))==col&&Text(Value(c))!="")).Select(r=>(int)r.Attribute("r")).DefaultIfEmpty(6).Max();
+            int oldFileLast=last(oldH+11),oldVolumeLast=last(oldH+12);
+            int oldManifestStart=Convert.ToInt32(Value(At(old,1,oldH+3))??layout.ManifestStart,Inv);
+            var pattern=new Regex(@"""(?:[^""]|"""")*""|'Справка по томам'!(?<c1>\$?[A-Z]{1,3})(?<r1>\$?\d+)(?::(?<c2>\$?[A-Z]{1,3})(?<r2>\$?\d+))?",RegexOptions.IgnoreCase);
+            Func<string,int,int,string> address=(c,r,col)=> (c.StartsWith("$",StringComparison.Ordinal)?"$":"")+MergeEngine.ExcelColumn(col)+(r<0?"$":"")+Math.Abs(r).ToString(Inv);
+            foreach(var cell in doc.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c")) {
+                var f=cell.Element(N+"f");if(f==null)continue;
+                f.Value=pattern.Replace(f.Value,m=>{
+                    if(!m.Groups["c1"].Success)return m.Value;
+                    string c1=m.Groups["c1"].Value,c2=m.Groups["c2"].Value,r1=m.Groups["r1"].Value,r2=m.Groups["r2"].Value;
+                    int a=Column(c1.TrimStart('$')),b=c2==""?a:Column(c2.TrimStart('$')),top=int.Parse(r1.TrimStart('$'),Inv),bottom=r2==""?top:int.Parse(r2.TrimStart('$'),Inv);
+                    if(a>=oldH&&a<oldH+HelperWidth) {
+                        if(top==7&&bottom==oldFileLast)bottom=fileLast;
+                        else if(top==7&&bottom==oldVolumeLast)bottom=volumeLast;
+                        a+=h-oldH;b+=h-oldH;
+                    } else if(top>=oldManifestStart&&top<=layout.OldEnd) {
+                        if(top==oldManifestStart&&r2!=""&&bottom>=layout.OldEnd-SpareBoxes){top=layout.ManifestStart;bottom=layout.ManifestEnd;}
+                    } else {
+                        int mapped;if(layout.RowMap.TryGetValue(top,out mapped))top=mapped;if(layout.RowMap.TryGetValue(bottom,out mapped))bottom=mapped;
+                        var block=layout.OldBlocks.FirstOrDefault(x=>a>=x.Start&&a<=x.Note);
+                        var next=block==null?null:layout.Blocks.FirstOrDefault(x=>x.Date==block.Date);
+                        if(block!=null&&next!=null){a=a==block.Note?next.Note:a==block.Total?next.Total:next.Start+a-block.Start;b=b==block.Note?next.Note:b==block.Total?next.Total:next.Start+b-block.Start;}
+                    }
+                    return "'Справка по томам'!"+address(c1,r1.StartsWith("$",StringComparison.Ordinal)?-top:top,a)+(r2==""?"":":"+address(c2,r2.StartsWith("$",StringComparison.Ordinal)?-bottom:bottom,b));
+                });
+                // Every report formula recalculates from the updated reference on open.
+                var cached=cell.Element(N+"v");if(cached!=null)cached.Remove();
+            }
         }
         static void MoveSummaryStatistics(Grid g,int end) {
             var map=new Dictionary<int,int>{{20,34},{21,35},{30,20},{31,21},{42,32}};for(int i=22;i<=28;i++)map[i]=i+14;for(int i=32;i<=41;i++)map[i]=i-10;
