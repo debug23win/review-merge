@@ -177,7 +177,7 @@ namespace ReviewMerge {
             if(formatted) {
                 WriteReference(g,h,previous.Root.Element(N+"sheetData").Elements(N+"row").Select(r=>(int)r.Attribute("r")).DefaultIfEmpty(1).Max());
                 RefreshFormattedSummary(previous,h,last,vlast);
-                PutSheet("Свод",previous);
+                SplitFormattedReport(previous);
                 return;
             }
             g.Set(20,1,"СТАТИСТИКА ПО ОСНОВНОМУ ЛИСТУ",defaults[8]);g.Heights[20]=24;
@@ -241,6 +241,7 @@ namespace ReviewMerge {
         // The user's transposed report is a template: update its links, retaining its
         // cells, styles, dates, outlines, page breaks, print areas and alternative views.
         void RefreshFormattedSummary(XDocument doc,int h,int fileLast,int volumeLast) {
+            ExpandSharedFormulas(doc);
             var layout=referenceLayout;int oldH=layout.OldHelper;
             if(oldH==0)throw new System.IO.InvalidDataException("В оформленном «Своде» не найдены исходные формулы «Справки по томам». Сводный документ не изменён.");
             var old=layout.Previous;

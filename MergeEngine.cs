@@ -40,6 +40,7 @@ namespace ReviewMerge {
     }
     public sealed class MergeOptions {
         public bool CurrentDateForNewReviews, MatchSurnames;
+        public bool KeepLegacyColumns;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
         public Func<string, string, bool> SamePerson;
         // A saved answer for such a pair, if any: initials that agree merge people without a question unless the operator said "no" before.
@@ -185,7 +186,7 @@ namespace ReviewMerge {
                 Check(token);
                 progress((int)(40.0 * fi / files.Count), "Чтение " + Path.GetFileName(files[fi]));
                 SourceBook source = XlsxReader.Read(files[fi], sheetName);
-                if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; result.Columns = source.Columns; }
+                if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; result.Columns = new RegisterColumns {HasVolumeNumber = !options.KeepLegacyColumns || source.Columns.HasVolumeNumber}; }
                 foreach (var orphan in source.Orphans) {
                     result.History.Add(orphan);
                     AddProblem(result, orphan, "Есть данные проверки, но нет названия документа. В сводном документе такая строка сохраняется на месте; строка из другого источника не переносится без идентификации документа. В статистику документов не включена.");

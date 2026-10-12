@@ -134,6 +134,8 @@ namespace ReviewMerge {
             book=Xml("xl/workbook.xml");rels=Xml("xl/_rels/workbook.xml.rels");types=Xml("[Content_Types].xml");
             var pr=book.Root.Element(N+"workbookPr");if(pr!=null && ((string)pr.Attribute("date1904")=="1" || (string)pr.Attribute("date1904")=="true"))throw new InvalidDataException("Первый файл использует систему дат 1904. Выберите первым файл с системой дат 1900.");
             SetupStyles();mainColumns=result.Columns;mainPath=PathFor(mainName);var main=Xml(mainPath);string actualName=(string)book.Root.Element(N+"sheets").Elements().First(e=>PathFor((string)e.Attribute("name"))==mainPath).Attribute("name");
+            string volumeHeader=XlsxReader.Normal(Value(At(main,result.HeaderRow,13))).Replace(" ","");
+            if(mainColumns.HasVolumeNumber&&volumeHeader!="НОМЕРТОМА"&&volumeHeader!="№ТОМА")InsertVolumeColumn(main,actualName,result.HeaderRow,result.StartRow);
             int first=result.StartRow;var data=main.Root.Element(N+"sheetData");
             var existing=data.Elements(N+"row").ToDictionary(e=>(int)e.Attribute("r"));
             int next=Math.Max(first-1,existing.Keys.DefaultIfEmpty(first-1).Max())+1;
@@ -208,13 +210,13 @@ namespace ReviewMerge {
             // Excel recalculates on open; a stored forced full calculation would recalculate the whole book after every edit.
             var calc=book.Root.Element(N+"calcPr");if(calc==null){calc=new XElement(N+"calcPr");book.Root.Add(calc);}calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",null);calc.SetAttributeValue("calcId",0);
             rels.Root.Elements().Where(e=>((string)e.Attribute("Type")??"").EndsWith("/calcChain")).Remove();types.Root.Elements().Where(e=>((string)e.Attribute("PartName")??"").EndsWith("/calcChain.xml")).Remove();entries.Remove("xl/calcChain.xml");
-            int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>(string)x.e.Attribute("name")=="Свод").i;
+            int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>string.Equals((string)x.e.Attribute("name"),"Свод",StringComparison.OrdinalIgnoreCase)).i;
             var view=book.Root.Element(N+"bookViews");if(view==null){view=new XElement(N+"bookViews");book.Root.Element(N+"sheets").AddBeforeSelf(view);}if(!view.Elements().Any())view.Add(new XElement(N+"workbookView"));foreach(var workbookView in view.Elements())workbookView.SetAttributeValue("activeTab",svIndex);
             foreach(var sheet in book.Root.Element(N+"sheets").Elements()) {
                 string sheetName=(string)sheet.Attribute("name"),path=PathFor(sheetName);var doc=Xml(path);
                 bool changed=false;
                 foreach(var sheetView in doc.Descendants(N+"sheetView")) {
-                    string selected=sheetName=="Свод"?"1":null;
+                    string selected=string.Equals(sheetName,"Свод",StringComparison.OrdinalIgnoreCase)?"1":null;
                     if((string)sheetView.Attribute("tabSelected")!=selected){sheetView.SetAttributeValue("tabSelected",selected);changed=true;}
                 }
                 if(changed)Store(path,doc);

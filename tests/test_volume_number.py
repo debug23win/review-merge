@@ -101,9 +101,11 @@ def test_number_conflict_and_legacy_target():
     assert report['Conflicts'] == 1 and load_workbook(target)[MAIN]['M7'].value == '0007'
     old = make(TEMP / 'legacy-master.xlsx')
     before = old.read_bytes()
-    run(old, source, success=False)
-    assert old.read_bytes() == before
-    assert 'Номер тома' in Path(str(old) + '.error.txt').read_text(encoding='utf-8-sig')
+    run(old, source)
+    updated = load_workbook(old)[MAIN]
+    assert updated['M5'].value == 'Номер тома' and updated['M7'].value == '0008'
+    assert updated['M7'].number_format == '@'
+    assert list(TEMP.glob('legacy-master.xlsx.backup-*'))[0].read_bytes() == before
 
 
 def test_formatted_summary_is_preserved():
@@ -131,10 +133,10 @@ def test_formatted_summary_is_preserved():
     m['C30'] = 'Новый том'; m['D30'] = 'pdf'; m['H30'] = 'AABBCCDD'
     m['I30'] = 'Анна'; m['J30'] = datetime(2026, 10, 3); m['L30'] = 2
     w.save(source); run(target, source)
-    w = load_workbook(target); s = w['Свод']; ref = w['Справка по томам']
+    w = load_workbook(target); s = w['СВОД']; ref = w['Справка по томам']
     assert s['A1'].value == 'Оформленный пользователем свод'
     assert s['H6']._style == saved_style and list(map(str, s.merged_cells.ranges)) == saved_merges
-    assert str(s.print_area) == saved_print and s.column_dimensions['B'].width == 38
+    assert str(s.print_area).upper() == saved_print.upper() and s.column_dimensions['B'].width == 38
     assert s.row_dimensions[7].hidden and s['B6'].fill.fgColor.rgb == '00AABBCC'
     assert s['C9'].value == literal, 'References inside quoted text must not change'
     h = next(c.column for c in ref[1] if c.value == 'ReviewMerge.FirstDates.v3')

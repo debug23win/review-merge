@@ -23,7 +23,7 @@ def cells(archive, member):
     return result
 
 def run(output, sources, current_date=False, *flags):
-    options=(['--current-date-for-new'] if current_date else [])+list(flags)
+    options=['--keep-legacy-columns']+(['--current-date-for-new'] if current_date else [])+list(flags)
     subprocess.run([str(ROOT/'Свод_проверки.exe'), '--batch', str(output), *options, '2026-10-04', 'Все загруженные файлы', *map(str, sources)], check=True, timeout=90)
     return json.loads(Path(str(output)+'.run.json').read_text(encoding='utf-8-sig'))
 
@@ -92,7 +92,7 @@ def test_user_columns():
     shutil.copyfile(ROOT/'tests/fixtures/Анна.xlsx',target)
     wb=load_workbook(target);wb['Все загруженные файлы']['U7']='Сохранить';wb.save(target)
     before=target.read_bytes()
-    args=[str(ROOT/'Свод_проверки.exe'),'--batch',str(target),'2026-10-04','Все загруженные файлы',str(ROOT/'tests/fixtures/Борис.xlsx')]
+    args=[str(ROOT/'Свод_проверки.exe'),'--batch',str(target),'--keep-legacy-columns','2026-10-04','Все загруженные файлы',str(ROOT/'tests/fixtures/Борис.xlsx')]
     assert subprocess.run(args,timeout=90).returncode==0
     assert load_workbook(target)['Все загруженные файлы']['U7'].value=='Сохранить'
     assert list(temp.glob('*.backup-*'))[0].read_bytes()==before
