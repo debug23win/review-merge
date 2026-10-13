@@ -174,6 +174,11 @@ namespace ReviewMerge {
             }
             int vlast=volumes.Count+6;
             string xr=LocalRange(h+3,7,last),zr=LocalRange(h+5,7,last),cr=LocalRange(h+11,7,last),vdr=LocalRange(vh+1,7,vlast),vir=LocalRange(vh+2,7,vlast),isv=","+LocalRange(h+2,7,vlast)+",1";
+            if(!options.KeepLegacyReport) {
+                WriteReference(g,h,1);
+                WriteRecreatedReports(result,calendar,asOf,dates,issues,typeCounts,previous);
+                return;
+            }
             if(formatted) {
                 WriteReference(g,h,previous.Root.Element(N+"sheetData").Elements(N+"row").Select(r=>(int)r.Attribute("r")).DefaultIfEmpty(1).Max());
                 RefreshFormattedSummary(previous,h,last,vlast);

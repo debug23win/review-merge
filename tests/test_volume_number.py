@@ -31,9 +31,9 @@ def make(path, new=False, number=None):
     return path
 
 
-def run(target, *sources, success=True):
+def run(target, *sources, success=True, legacy=False):
     completed = subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(target),
-                                '2026-10-04', MAIN, *map(str, sources)], timeout=90)
+                                '2026-10-04', MAIN, *map(str, sources), *(['--keep-legacy-report'] if legacy else [])], timeout=90)
     assert (completed.returncode == 0) == success
     if success:
         return json.loads(Path(str(target) + '.run.json').read_text(encoding='utf-8-sig'))
@@ -110,7 +110,7 @@ def test_number_conflict_and_legacy_target():
 
 def test_formatted_summary_is_preserved():
     target = make(TEMP / 'formatted.xlsx', True, '01.02')
-    run(target, target)
+    run(target, target, legacy=True)
     w = load_workbook(target); ref = w['Справка по томам']; h = next(c.column for c in ref[1] if c.value == 'ReviewMerge.FirstDates.v3')
     from openpyxl.utils import get_column_letter as letter
     file_last = max(c.row for row in ref for c in row if c.column == h + 11 and c.value)
@@ -132,7 +132,7 @@ def test_formatted_summary_is_preserved():
     w = load_workbook(source); m = w[MAIN]
     m['C30'] = 'Новый том'; m['D30'] = 'pdf'; m['H30'] = 'AABBCCDD'
     m['I30'] = 'Анна'; m['J30'] = datetime(2026, 10, 3); m['L30'] = 2
-    w.save(source); run(target, source)
+    w.save(source); run(target, source, legacy=True)
     w = load_workbook(target); s = w['СВОД']; ref = w['Справка по томам']
     assert s['A1'].value == 'Оформленный пользователем свод'
     assert s['H6']._style == saved_style and list(map(str, s.merged_cells.ranges)) == saved_merges

@@ -18,8 +18,8 @@ namespace ReviewMerge {
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
                 if (args.Length > 0 && args[0] == "--batch") {
                     // Options of the batch mode answer every question with "yes": --match-surnames merges people with one surname, --fill-incomplete fills the remaining rows of partly checked boxes.
-                    string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns"};
-                    var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1]),KeepLegacyColumns=args.Contains(switches[4])};
+                    string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns","--keep-legacy-report"};
+                    var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1]),KeepLegacyColumns=args.Contains(switches[4]),KeepLegacyReport=args.Contains(switches[5])};
                     if(args.Contains(switches[2]))options.FillIncomplete=list=>list;
                     if(args.Contains(switches[3]))options.ConvertMark=(mark,count)=>true;
                     args=args.Where(a=>!switches.Contains(a)).ToArray();

@@ -22,7 +22,7 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          $version = '1.5.4'
+          $version = '1.5.5'
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
           ./build.ps1 -Version $version
       - name: Test merging and update validation
@@ -36,6 +36,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Volume column tests failed' }
           python tests/test_split_reports.py
           if ($LASTEXITCODE -ne 0) { throw 'Split report tests failed' }
+          python tests/test_recreated_reports.py
+          if ($LASTEXITCODE -ne 0) { throw 'Report recreation tests failed' }
           ./tests/test_updates.ps1
       - name: Publish portable package
         if: (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && github.event_name != 'pull_request'

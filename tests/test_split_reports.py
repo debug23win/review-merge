@@ -55,7 +55,7 @@ for a in ['D16','D17','D18']:
 files[sheet]=E.tostring(doc,encoding='utf-8',xml_declaration=True)
 with zipfile.ZipFile(source,'w',zipfile.ZIP_DEFLATED) as z:
  for a,data in files.items():z.writestr(a,data)
-def run():subprocess.run([str(ROOT/'Свод_проверки.exe'),'--batch',str(target),'2026-10-04','Все загруженные файлы',str(source)],check=True,timeout=90)
+def run():subprocess.run([str(ROOT/'Свод_проверки.exe'),'--batch',str(target),'2026-10-04','Все загруженные файлы',str(source),'--keep-legacy-report'],check=True,timeout=90)
 run();w=load_workbook(target)
 assert {'СВОД','Стат. по типам','Стат. по зам.','Итоги работы'}<=set(w.sheetnames)
 main=w['Все загруженные файлы'];assert main['M5'].value=='Номер тома' and main['M7'].number_format=='@'

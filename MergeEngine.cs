@@ -41,6 +41,7 @@ namespace ReviewMerge {
     public sealed class MergeOptions {
         public bool CurrentDateForNewReviews, MatchSurnames;
         public bool KeepLegacyColumns;
+        public bool KeepLegacyReport;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
         public Func<string, string, bool> SamePerson;
         // A saved answer for such a pair, if any: initials that agree merge people without a question unless the operator said "no" before.
