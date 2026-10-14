@@ -599,6 +599,6 @@ if __name__ == '__main__':
     test_only_unqualified_reviewers()
     print('Report recreation passed: old/absent/custom layouts; all-date cumulative reviewer rows; '
           'daily and unique global cached totals; future dates; lifetime completed-volume filtering; '
-          'reference-only/undated/ИУЛ-only/incomplete/zero reviewers; namesakes; '
+          'reference-only/undated/IUL-only/incomplete/zero reviewers; namesakes; '
           'widths, merged groups, borders, unwrapped captions and repeat merge')
     print(B)
