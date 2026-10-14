@@ -8,12 +8,12 @@ namespace ReviewMerge {
     public sealed partial class XlsxWriter {
         // Reports are outputs: their layout is rebuilt independently of the previous workbook.
         // The register and the reference sheet remain the sources of every calculation.
-        int RecreatedStyle(string color,bool bold,int format=0,bool gray=false,int size=12) {
-            int style=ReportStyle(SummaryStylesBase,color:color,bold:bold,number:format,size:size);
-            string key="recreated|"+style+"|"+gray;int id;if(reportStyleCache.TryGetValue(key,out id))return id;
+        int RecreatedStyle(string color,bool bold,int format=0,bool gray=false,int size=12,bool table=true) {
+            int style=ReportStyle(SummaryStylesBase,table?null:"none",table?null:"none",table?null:"none",table?null:"none",color:color,bold:bold,number:format,size:size);
+            string key="recreated|"+style+"|"+gray+"|"+table;int id;if(reportStyleCache.TryGetValue(key,out id))return id;
             var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(style));
             xf.SetAttributeValue("fillId",gray?RecreatedGrayFill:0);xf.SetAttributeValue("applyFill",1);
-            var a=xf.Element(N+"alignment");a.SetAttributeValue("horizontal","center");a.SetAttributeValue("wrapText",1);
+            var a=xf.Element(N+"alignment");a.SetAttributeValue("horizontal",table||size>=16?"center":"left");a.SetAttributeValue("wrapText",table?1:0);
             id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);reportStyleCache[key]=id;return id;
         }
         int SummaryStylesBase,RecreatedGrayFill,RecreatedDecimal;
@@ -32,7 +32,7 @@ namespace ReviewMerge {
             object rb=Value(At(l.Previous,1,2)),rv=Value(At(l.Previous,2,2));double totalBoxes=rb is double?(double)rb:l.BoxCount,totalVolumes=rv is double?(double)rv:l.Volumes.Count(v=>v.IsVolume);
             string tb="IF(ISNUMBER('Справка по томам'!$B$1),'Справка по томам'!$B$1,COUNT('Справка по томам'!"+LocalRange(2,l.ManifestStart,l.ManifestEnd)+"))";
             string tv="IF(ISNUMBER('Справка по томам'!$B$2),'Справка по томам'!$B$2,COUNTIF("+isv+",1))";
-            var people=result.Rows.Select(r=>StatKeyOfRaw(r.Values[8])).Where(n=>n!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n=>n,StringComparer.CurrentCulture).ToList();
+            var people=result.Rows.Select(r=>StatKeyOfRaw(r.Values[8])).Concat(l.People.Values.Select(StatKeyOf)).Where(n=>n!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n=>n,StringComparer.CurrentCulture).ToList();
             var days=calendar.Concat(l.Blocks.Where(b=>b.Date.HasValue).Select(b=>b.Date.Value)).Distinct().OrderBy(d=>d).ToList();if(days.Count==0)days.Add(asOf.ToOADate());
             Func<int,double,string,string,bool,Tuple<double,string>> metric=(kind,serial,day,who,daily)=> {
                 Func<string,string> dateCriteria=d=>daily?d+","+day:d+",\">0\","+d+",\"<=\"&"+day;
@@ -42,7 +42,7 @@ namespace ReviewMerge {
                 Func<int,bool> volume=i=>l.Volumes[i].IsVolume&&inDay(l.Volumes[i].Date)&&(who==""||string.Equals(StatKeyOf(l.Volumes[i].Who),who,StringComparison.OrdinalIgnoreCase));
                 if(kind==0)return Tuple.Create(totalBoxes,tb);if(kind==1)return Tuple.Create(totalVolumes,tv);
                 if(kind==2){
-                    var raw=l.Names.Values.Where(n=>string.Equals(StatKeyOf(n),who,StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();if(who!=""&&raw.Count==0)raw.Add(who);
+                    var raw=l.Names.Values.Concat(l.People.Values).Where(n=>string.Equals(StatKeyOf(n),who,StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();if(who!=""&&raw.Count==0)raw.Add(who);
                     string formula=who==""?"COUNTIFS("+dateCriteria(bd)+")":"SUM("+string.Join(",",raw.Select(n=>"COUNTIFS("+dateCriteria(bd)+","+bf+","+exact(n)+")"))+")";
                     double count=l.Completed.Count(p=>inDay(p.Value)&&(who==""||string.Equals(StatKeyOf(l.CompletedBy[p.Key]),who,StringComparison.OrdinalIgnoreCase)));return Tuple.Create(count,formula);
                 }
@@ -54,8 +54,8 @@ namespace ReviewMerge {
                 throw new InvalidOperationException("Неизвестный показатель свода: "+kind);
             };
             string black="FF000000",gold="FF996600",green="FF00B050",red="FFFF0000",blue="FF0070C0";
-            int plain=RecreatedStyle(black,false),header=RecreatedStyle(black,true),title=RecreatedStyle(black,true,size:16);
-            Action<Grid,List<string>,string,int> start=(g,merges,text,width)=>{g.Set(1,1,text,title);g.Heights[1]=32;g.Set(2,1,"Этап 1 ВСМ-1",plain);merges.Add("A1:"+MergeEngine.ExcelColumn(width)+"1");};
+            int plain=RecreatedStyle(black,false),header=RecreatedStyle(black,true),heading=RecreatedStyle(black,false,table:false),title=RecreatedStyle(black,true,size:16,table:false);
+            Action<Grid,List<string>,string,int> start=(g,merges,text,width)=>{g.Set(1,1,text,title);g.Heights[1]=32;g.Set(2,1,"Этап 1 ВСМ-1",heading);merges.Add("A1:"+MergeEngine.ExcelColumn(width)+"1");};
             Action<Grid,int,int,Tuple<double,string>,string,bool,bool> set=(g,r,c,value,color,bold,gray)=>g.Set(r,c,value.Item1,RecreatedStyle(color,bold,1,gray),value.Item2);
             Action<Grid,int,int,int,double,string,string,bool,bool,bool,double,string> pair=(g,r,c,kind,serial,day,who,daily,bold,gray,denominator,denomFormula)=> {
                 var v=metric(kind,serial,day,who,daily);bool future=serial>asOf.ToOADate();string color=black;
@@ -65,17 +65,20 @@ namespace ReviewMerge {
             Action<Grid,int,int,int,string> colorCells=(g,r,from,to,color)=>{for(int c=from;c<=to;c++)if(g.Rows[r].ContainsKey(c))g.Rows[r][c].SetAttributeValue("s",ReportStyle((int?)g.Rows[r][c].Attribute("s")??plain,color:color));};
             Action<Grid,int,int,string,bool> group=(g,first,last,who,hidden)=>{if(last<first)return;for(int r=first;r<=last;r++)g.Templates[r]=new XElement(N+"row",new XAttribute("r",r),new XAttribute("outlineLevel",1),new XAttribute("hidden",hidden?1:0));};
             Func<double,List<string>> owners=day=>people.Where(w=>Enumerable.Range(0,result.Rows.Count).Any(i=>dates[i]==day&&string.Equals(StatKeyOfRaw(result.Rows[i].Values[8]),w,StringComparison.OrdinalIgnoreCase))||l.Volumes.Any(v=>v.Date==day&&string.Equals(StatKeyOf(v.Who),w,StringComparison.OrdinalIgnoreCase))||l.Completed.Any(b=>b.Value==day&&string.Equals(StatKeyOf(l.CompletedBy[b.Key]),w,StringComparison.OrdinalIgnoreCase))).ToList();
-            // First report: cumulative dates, with grouped daily contributions below each date.
+            // Every date includes every reviewer: checked is cumulative, the daily block is not.
             var main=new Grid();var mm=new List<string>();start(main,mm,"СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ",19);
-            main.Set(3,1,"Итоги по датам — накопительно; строки проверяющих — результаты за день.",plain);mm.Add("A3:S3");
+            main.Set(3,1,"Проверено — накопительно по датам и проверяющим; проверено за сутки — за указанный день.",heading);mm.Add("A3:S3");
             for(int c=1;c<=3;c++){main.Set(4,c,new[]{"Этап","Дата / проверяющий","Время"}[c-1],header);mm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c)+"6");}
             for(int b=0;b<4;b++){int c=4+4*b;string color=new[]{gold,green,red,blue}[b];int st=RecreatedStyle(color,true);main.Set(4,c,new[]{"Всего","Проверено","Осталось проверить","Проверено за сутки"}[b],st);mm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+3)+"4");for(int j=0;j<2;j++){int p=c+2*j;main.Set(5,p,j==0?"коробов":"томов",st);mm.Add(MergeEngine.ExcelColumn(p)+"5:"+MergeEngine.ExcelColumn(p+1)+"5");main.Set(6,p,"Шт.",st);main.Set(6,p+1,"%",st);}}
             main.Heights[4]=32;main.Heights[5]=30;main.Heights[6]=26;int mr=7,di=0;
-            foreach(double serial in days){int summary=mr;bool gray=di++%2==1;var names=owners(serial);
+            foreach(double serial in days){int summary=mr;bool gray=di++%2==1;var names=people;
                 for(int n=-1;n<names.Count;n++){int r=mr++;bool summaryRow=n<0;string who=summaryRow?"":names[n],day=summaryRow?"$B"+r:"$B$"+summary;main.Set(r,2,summaryRow?(object)serial:who,RecreatedStyle(black,summaryRow,summaryRow?df:0,gray));main.Set(r,3,17.0/24,RecreatedStyle(black,summaryRow,20,gray));
                     for(int j=0;j<2;j++){double denominator=j==0?totalBoxes:totalVolumes;string denom=j==0?tb:tv;
-                        pair(main,r,4+j*2,j,serial,day,who,false,summaryRow,gray,denominator,denom);pair(main,r,8+j*2,2+j,serial,day,who,!summaryRow,summaryRow,gray,denominator,denom);pair(main,r,16+j*2,2+j,serial,day,who,true,summaryRow,gray,denominator,denom);
-                        int c=12+j*2;main.Set(r,c,serial>asOf.ToOADate()?(object)"":denominator-metric(2+j,serial,day,who,!summaryRow).Item1,RecreatedStyle(red,summaryRow,1,gray),"IF("+day+">"+cutoff+",\"\","+MergeEngine.ExcelColumn(4+j*2)+r+"-"+MergeEngine.ExcelColumn(8+j*2)+r+")");main.Set(r,c+1,serial>asOf.ToOADate()?(object)"":denominator>0?(denominator-metric(2+j,serial,day,who,!summaryRow).Item1)/denominator*100:0,RecreatedStyle(red,summaryRow,RecreatedDecimal,gray,size:10),"IF("+day+">"+cutoff+",\"\",IFERROR("+MergeEngine.ExcelColumn(c)+r+"/("+denom+")*100,0))");
+                        pair(main,r,8+j*2,2+j,serial,day,who,false,summaryRow,gray,denominator,denom);pair(main,r,16+j*2,2+j,serial,day,who,true,summaryRow,gray,denominator,denom);
+                        if(summaryRow){
+                            pair(main,r,4+j*2,j,serial,day,who,false,true,gray,denominator,denom);
+                            int c=12+j*2;main.Set(r,c,serial>asOf.ToOADate()?(object)"":denominator-metric(2+j,serial,day,who,false).Item1,RecreatedStyle(red,true,1,gray),"IF("+day+">"+cutoff+",\"\","+MergeEngine.ExcelColumn(4+j*2)+r+"-"+MergeEngine.ExcelColumn(8+j*2)+r+")");main.Set(r,c+1,serial>asOf.ToOADate()?(object)"":denominator>0?(denominator-metric(2+j,serial,day,who,false).Item1)/denominator*100:0,RecreatedStyle(red,true,RecreatedDecimal,gray,size:10),"IF("+day+">"+cutoff+",\"\",IFERROR("+MergeEngine.ExcelColumn(c)+r+"/("+denom+")*100,0))");
+                        }else foreach(int c in new[]{4+j*2,5+j*2,12+j*2,13+j*2})main.Set(r,c,null,RecreatedStyle(black,false,0,gray));
                     }for(int b=0;b<4;b++)colorCells(main,r,4+b*4,7+b*4,new[]{gold,green,red,blue}[b]);
                 }group(main,summary+1,mr-1,"",true);if(names.Count>0)main.Templates[summary]=new XElement(N+"row",new XAttribute("r",summary),new XAttribute("collapsed",1));
             }
@@ -103,10 +106,17 @@ namespace ReviewMerge {
                 SaveReport(tab,g,width,new[]{Col(1,1,10),Col(2,2,28)}.Concat(Enumerable.Range(3,width-2).Select(c=>Col(c,c,c%2==0?7:14))),merges,areas.ToArray());
             }
             // Reviewer matrix and its alternative grouped representation.
-            var work=new Grid();var wm=new List<string>();int ww=Math.Max(4,2+people.Count*2);start(work,wm,"СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ",ww);work.Set(4,1,"Этап",header);work.Set(4,2,"Дата",header);wm.Add("A4:A5");wm.Add("B4:B5");work.Set(6,1,"Этап 1",plain);work.Set(6,2,"Всего",header);
-            for(int i=0;i<people.Count;i++){int c=3+2*i;string who=people[i];work.Set(4,c,who,header);wm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+1)+"4");work.Set(5,c,"коробов",header);work.Set(5,c+1,"томов",header);for(int j=0;j<2;j++)set(work,6,c+j,metric(2+j,asOf.ToOADate(),cutoff,who,false),green,true,false);}
-            for(int d=0;d<days.Count;d++){int r=7+d;double serial=days[d];bool gray=d%2==1;work.Set(r,2,serial,RecreatedStyle(black,false,df,gray));for(int i=0;i<people.Count;i++)for(int j=0;j<2;j++){var v=metric(2+j,serial,"$B"+r,people[i],true);work.Set(r,3+2*i+j,serial>asOf.ToOADate()?(object)"":v.Item1,RecreatedStyle(black,false,1,gray),"IF($B"+r+">"+cutoff+",\"\","+v.Item2+")");}}
-            int matrixLast=6+days.Count;wm.Add("A6:A"+matrixLast);TableEdges(work,4,matrixLast,ww);int alt=matrixLast+3;work.Set(alt,1,"Альтернативное представление по проверяющим",header);wm.Add("A"+alt+":H"+alt);int ar=alt+1;
+            var work=new Grid();var wm=new List<string>();int ww=4+people.Count*2;start(work,wm,"СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ",ww);work.Set(4,1,"Этап",header);work.Set(4,2,"Дата",header);wm.Add("A4:A5");wm.Add("B4:B5");work.Set(6,1,"Этап 1",plain);work.Set(6,2,"Всего",header);
+            // The final pair counts unique boxes/volumes directly, just like the dated summary.
+            // It must not add box and volume units together or duplicate a shared box.
+            var workPeople=people.Concat(new[]{""}).ToList();
+            for(int i=0;i<workPeople.Count;i++){int c=3+2*i;string who=workPeople[i];work.Set(4,c,who==""?"ВСЕГО":who,header);wm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+1)+"4");work.Set(5,c,"коробов",header);work.Set(5,c+1,"томов",header);for(int j=0;j<2;j++)set(work,6,c+j,metric(2+j,asOf.ToOADate(),cutoff,who,false),green,true,false);}
+            for(int d=0;d<days.Count;d++){int r=7+d;double serial=days[d];bool gray=d%2==1;work.Set(r,2,serial,RecreatedStyle(black,false,df,gray));for(int i=0;i<workPeople.Count;i++)for(int j=0;j<2;j++){bool total=workPeople[i]=="";var v=metric(2+j,serial,"$B"+r,workPeople[i],true);work.Set(r,3+2*i+j,serial>asOf.ToOADate()?(object)"":v.Item1,RecreatedStyle(total?green:black,total,1,gray),"IF($B"+r+">"+cutoff+",\"\","+v.Item2+")");}}
+            int matrixLast=6+days.Count;wm.Add("A6:A"+matrixLast);TableEdges(work,4,matrixLast,ww,null,Enumerable.Range(0,workPeople.Count).Select(i=>3+2*i));
+            // A merged header carries its whole group's right edge, not the thin inner divider.
+            for(int i=0;i<workPeople.Count;i++){var cell=work.Rows[4][3+2*i];cell.SetAttributeValue("s",ReportStyle((int)cell.Attribute("s"),right:i==workPeople.Count-1?"thick":"medium"));}
+            var stage=work.Rows[6][1];stage.SetAttributeValue("s",ReportStyle((int)stage.Attribute("s"),bottom:"thick"));
+            int alt=matrixLast+3;work.Set(alt,1,"Альтернативное представление по проверяющим",RecreatedStyle(black,true,table:false));wm.Add("A"+alt+":H"+alt);int ar=alt+1;
             string[] ah={"Этап","Проверяющий / дата","Проверено томов","Томов с замечаниями","Томов за день","Проверено файлов","Файлов без даты","Проверено коробов"};for(int c=1;c<=8;c++)work.Set(ar,c,ah[c-1],header);work.Heights[ar]=60;ar++;
             foreach(string who in people){int summary=ar++;work.Set(summary,2,who,header);int[] kinds={3,7,9,5,20,2};for(int k=0;k<6;k++)set(work,summary,k+3,metric(kinds[k],asOf.ToOADate(),cutoff,who,k==2),green,true,false);
                 foreach(double serial in days.Where(d=>owners(d).Contains(who))){int r=ar++;work.Set(r,2,serial,RecreatedStyle(black,false,df));for(int k=0;k<6;k++)set(work,r,k+3,metric(kinds[k],serial,"$B"+r,who,true),k==2?blue:black,false,false);}group(work,summary+1,ar-1,"",false);
@@ -115,7 +125,7 @@ namespace ReviewMerge {
             var notes=new List<string>();if(previous!=null)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c")){if(cell.Element(N+"f")!=null)continue;string text=Text(Value(cell));if(text.StartsWith("Примечание",StringComparison.OrdinalIgnoreCase)||text.StartsWith("Примечания",StringComparison.OrdinalIgnoreCase))notes.Add(text);}
             foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,plain);mm.Add("A"+r+":S"+r);mr+=2;}
             if(notes.Count>0)SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+mr});
-            SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,28),Col(3,Math.Max(8,ww),12)},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)});
+            SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,16),Col(3,Math.Max(8,ww),9)},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)});
         }
     }
 }
