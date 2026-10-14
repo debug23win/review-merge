@@ -2,10 +2,68 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Xml.Linq;
 
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
+        [StructLayout(LayoutKind.Sequential)]struct ReportTextSize {public int Width,Height;}
+        [DllImport("gdi32.dll")]static extern IntPtr CreateCompatibleDC(IntPtr device);
+        [DllImport("gdi32.dll",CharSet=CharSet.Unicode,EntryPoint="CreateFontW")]static extern IntPtr CreateReportFont(int height,int width,int escapement,int orientation,int weight,uint italic,uint underline,uint strikeout,uint charset,uint outputPrecision,uint clipPrecision,uint quality,uint pitchAndFamily,string face);
+        [DllImport("gdi32.dll")]static extern IntPtr SelectObject(IntPtr device,IntPtr item);
+        [DllImport("gdi32.dll",CharSet=CharSet.Unicode,EntryPoint="GetTextExtentPoint32W")]static extern bool MeasureReportText(IntPtr device,string text,int length,out ReportTextSize size);
+        [DllImport("gdi32.dll",CharSet=CharSet.Unicode,EntryPoint="GetTextFaceW")]static extern int ReportTextFace(IntPtr device,int count,StringBuilder face);
+        [DllImport("gdi32.dll")]static extern bool DeleteObject(IntPtr item);
+        [DllImport("gdi32.dll")]static extern bool DeleteDC(IntPtr device);
+        internal static int ReportDigitWidth(string name,double size,bool bold,bool italic,int charset) {
+            string actual;return MeasureReportFont(name,size,bold,italic,charset,out actual);
+        }
+        static int MeasureReportFont(string name,double size,bool bold,bool italic,int charset,out string actual) {
+            // Realize a pixel-sized font, so Windows display scaling cannot change XLSX widths.
+            // Negative GDI height is the character/em height; 96 dpi is the workbook baseline.
+            actual=name;IntPtr device=CreateCompatibleDC(IntPtr.Zero),font=IntPtr.Zero,previous=IntPtr.Zero;
+            if(device==IntPtr.Zero)throw new InvalidOperationException("Не удалось измерить шрифт отчёта.");
+            try {
+                font=CreateReportFont(-(int)Math.Round(Math.Max(1,size)*96/72,MidpointRounding.AwayFromZero),0,0,0,bold?700:400,italic?1u:0u,0,0,(uint)charset,0,0,0,0,string.IsNullOrEmpty(name)?"Calibri":name);
+                if(font==IntPtr.Zero)throw new InvalidOperationException("Не удалось создать шрифт отчёта.");
+                previous=SelectObject(device,font);if(previous==IntPtr.Zero||previous==new IntPtr(-1))throw new InvalidOperationException("Не удалось выбрать шрифт отчёта.");
+                var measuredFace=new StringBuilder(256);if(ReportTextFace(device,measuredFace.Capacity,measuredFace)>0)actual=measuredFace.ToString();int width=1;
+                for(char digit='0';digit<='9';digit++){ReportTextSize extent;if(!MeasureReportText(device,digit.ToString(),1,out extent))throw new InvalidOperationException("Не удалось определить ширину цифры.");width=Math.Max(width,extent.Width);}
+                return width;
+            } finally {if(previous!=IntPtr.Zero&&previous!=new IntPtr(-1))SelectObject(device,previous);if(font!=IntPtr.Zero)DeleteObject(font);DeleteDC(device);}
+        }
+        // Excel's dialog uses character units; OOXML stores pixel width / maximum digit width.
+        // Font-dependent padding and whole-pixel rounding matter (raw 9 can display as 8.22).
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.column
+        // https://github.com/ClosedXML/ClosedXML/wiki/Cell-Dimensions
+        internal static double ReportColumnWidth(double characters,int maximumDigitWidth) {
+            if(characters<0||characters>255||double.IsNaN(characters)||maximumDigitWidth<1)throw new ArgumentOutOfRangeException();
+            int padding=2*(int)Math.Ceiling(maximumDigitWidth/4.0)+1;
+            double pixels=Math.Floor((characters<1?characters*(maximumDigitWidth+padding):characters*maximumDigitWidth+padding)+0.5);
+            return Math.Floor(pixels/maximumDigitWidth*256)/256;
+        }
+        int ReportMaximumDigitWidth(MergeResult result) {
+            var named=styles.Root.Element(N+"cellStyles");
+            var normal=named==null?null:named.Elements(N+"cellStyle").FirstOrDefault(e=>(int?)e.Attribute("builtinId")==0);
+            if(normal==null&&named!=null)normal=named.Elements(N+"cellStyle").FirstOrDefault(e=>(string)e.Attribute("name")=="Normal"||(string)e.Attribute("name")=="Обычный");
+            var styleXfs=styles.Root.Element(N+"cellStyleXfs");int xfId=normal==null?0:(int?)normal.Attribute("xfId")??0;
+            var xf=styleXfs==null?null:styleXfs.Elements().ElementAtOrDefault(xfId);
+            int fontId=xf==null?0:(int?)xf.Attribute("fontId")??0;var fontXml=styles.Root.Element(N+"fonts").Elements().ElementAtOrDefault(fontId);
+            var nameElement=fontXml==null?null:fontXml.Element(N+"name");var sizeElement=fontXml==null?null:fontXml.Element(N+"sz");
+            string name=nameElement==null?"Calibri":(string)nameElement.Attribute("val");double size=sizeElement==null?11:(double?)sizeElement.Attribute("val")??11;
+            var schemeElement=fontXml==null?null:fontXml.Element(N+"scheme");string scheme=schemeElement==null?null:(string)schemeElement.Attribute("val");
+            var themeRel=rels.Root.Elements().FirstOrDefault(e=>(string)e.Attribute("TargetMode")!="External"&&((string)e.Attribute("Type")??"").EndsWith("/theme",StringComparison.Ordinal));
+            if(themeRel!=null&&(scheme=="major"||scheme=="minor")){
+                string target=(string)themeRel.Attribute("Target"),path=Uri.UnescapeDataString(new Uri(new Uri("http://xlsx/xl/workbook.xml"),target).AbsolutePath.TrimStart('/'));
+                if(entries.ContainsKey(path)){XNamespace a="http://schemas.openxmlformats.org/drawingml/2006/main";var latin=Xml(path).Descendants(a+(scheme+"Font")).Elements(a+"latin").FirstOrDefault();string themed=latin==null?null:(string)latin.Attribute("typeface");if(!string.IsNullOrEmpty(themed))name=themed;}
+            }
+            Func<string,bool> enabled=tag=>{var e=fontXml==null?null:fontXml.Element(N+tag);return e!=null&&(string)e.Attribute("val")!="0"&&(string)e.Attribute("val")!="false";};
+            var charsetElement=fontXml==null?null:fontXml.Element(N+"charset");int charset=charsetElement==null?1:(int?)charsetElement.Attribute("val")??1;
+            string actual;int width=MeasureReportFont(name,size,enabled("b"),enabled("i"),charset,out actual);
+            if(!string.Equals(name,actual,StringComparison.OrdinalIgnoreCase))result.Problems.Add(new Problem{File="Итоги работы",Detail="Шрифт обычного стиля «"+name+"» заменён Windows на «"+actual+"». Ширина столбцов рассчитана по доступному шрифту; в Excel с другим шрифтом возможны отличия."});
+            return width;
+        }
         // Reports are outputs: their layout is rebuilt independently of the previous workbook.
         // The register and the reference sheet remain the sources of every calculation.
         int RecreatedStyle(string color,bool bold,int format=0,bool gray=false,int size=12,bool table=true) {
@@ -32,7 +90,9 @@ namespace ReviewMerge {
             object rb=Value(At(l.Previous,1,2)),rv=Value(At(l.Previous,2,2));double totalBoxes=rb is double?(double)rb:l.BoxCount,totalVolumes=rv is double?(double)rv:l.Volumes.Count(v=>v.IsVolume);
             string tb="IF(ISNUMBER('Справка по томам'!$B$1),'Справка по томам'!$B$1,COUNT('Справка по томам'!"+LocalRange(2,l.ManifestStart,l.ManifestEnd)+"))";
             string tv="IF(ISNUMBER('Справка по томам'!$B$2),'Справка по томам'!$B$2,COUNTIF("+isv+",1))";
-            var people=result.Rows.Select(r=>StatKeyOfRaw(r.Values[8])).Concat(l.People.Values.Select(StatKeyOf)).Where(n=>n!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n=>n,StringComparer.CurrentCulture).ToList();
+            // Membership is based on a fully checked volume anywhere in the history, not
+            // activity on the selected day. Standalone IULs and incomplete volumes do not qualify.
+            var people=l.Volumes.Where(v=>v.IsVolume&&v.Date.HasValue&&v.Date.Value>0).Select(v=>StatKeyOf(v.Who)).Where(n=>n!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n=>n,StringComparer.CurrentCulture).ToList();
             var days=calendar.Concat(l.Blocks.Where(b=>b.Date.HasValue).Select(b=>b.Date.Value)).Distinct().OrderBy(d=>d).ToList();if(days.Count==0)days.Add(asOf.ToOADate());
             Func<int,double,string,string,bool,Tuple<double,string>> metric=(kind,serial,day,who,daily)=> {
                 Func<string,string> dateCriteria=d=>daily?d+","+day:d+",\">0\","+d+",\"<=\"&"+day;
@@ -89,7 +149,7 @@ namespace ReviewMerge {
             foreach(bool types in new[]{true,false}){var g=new Grid();var merges=new List<string>();int width=types?22:16;string tab=types?"Стат. по типам":"Стат. по зам.";start(g,merges,types?"КОЛИЧЕСТВО ЗАМЕЧАНИЙ ПО ТИПАМ":"СТАТИСТИКА ПО ЗАМЕЧАНИЯМ",width);
                 g.Set(4,1,"Этап",header);g.Set(4,2,"Дата / проверяющий",header);merges.Add("A4:A5");merges.Add("B4:B5");string[] labels=types?typeNames:statNames;
                 for(int i=0;i<labels.Length;i++){int c=3+2*i;g.Set(4,c,labels[i],header);g.Set(5,c,"Шт.",header);g.Set(5,c+1,"%",header);merges.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+1)+"4");}g.Heights[4]=92;g.Heights[5]=26;
-                int row=6,index=0;foreach(double serial in days){int summary=row;bool gray=index++%2==1;var names=owners(serial);for(int n=-1;n<names.Count;n++){int r=row++;bool sum=n<0;string who=sum?"":names[n],day=sum?"$B"+r:"$B$"+summary;g.Set(r,2,sum?(object)serial:who,RecreatedStyle(black,sum,sum?df:0,gray));
+                int row=6,index=0;foreach(double serial in days){int summary=row;bool gray=index++%2==1;var names=people;for(int n=-1;n<names.Count;n++){int r=row++;bool sum=n<0;string who=sum?"":names[n],day=sum?"$B"+r:"$B$"+summary;g.Set(r,2,sum?(object)serial:who,RecreatedStyle(black,sum,sum?df:0,gray));
                     for(int i=0;i<labels.Length;i++){int c=3+2*i;bool daily=!sum||!types&&i>=5;int kind=types?(i<8?10+i:i==8?18:7):new[]{4,5,3,6,7,8,9}[i];double denominator=types?totalVolumes:i==2||i==4||i==6?totalVolumes:result.Documents;string denom=types||i==2||i==4||i==6?tv:"COUNTA("+range(11,fl)+")";
                         if(kind==18){double count=Enumerable.Range(10,8).Sum(k=>metric(k,serial,day,who,daily).Item1);g.Set(r,c,serial>asOf.ToOADate()?(object)"":count,RecreatedStyle(black,sum,1,gray),"IF("+day+">"+cutoff+",\"\","+string.Join("+",Enumerable.Range(0,8).Select(k=>MergeEngine.ExcelColumn(3+2*k)+r))+")");g.Set(r,c+1,serial>asOf.ToOADate()?(object)"":denominator>0?count/denominator*100:0,RecreatedStyle(black,sum,RecreatedDecimal,gray,size:10),"IF("+day+">"+cutoff+",\"\",IFERROR("+MergeEngine.ExcelColumn(c)+r+"/("+denom+")*100,0))");}
                         else pair(g,r,c,kind,serial,day,who,daily,sum,gray,denominator,denom);
@@ -119,13 +179,13 @@ namespace ReviewMerge {
             int alt=matrixLast+3;work.Set(alt,1,"Альтернативное представление по проверяющим",RecreatedStyle(black,true,table:false));wm.Add("A"+alt+":H"+alt);int ar=alt+1;
             string[] ah={"Этап","Проверяющий / дата","Проверено томов","Томов с замечаниями","Томов за день","Проверено файлов","Файлов без даты","Проверено коробов"};for(int c=1;c<=8;c++)work.Set(ar,c,ah[c-1],header);work.Heights[ar]=60;ar++;
             foreach(string who in people){int summary=ar++;work.Set(summary,2,who,header);int[] kinds={3,7,9,5,20,2};for(int k=0;k<6;k++)set(work,summary,k+3,metric(kinds[k],asOf.ToOADate(),cutoff,who,k==2),green,true,false);
-                foreach(double serial in days.Where(d=>owners(d).Contains(who))){int r=ar++;work.Set(r,2,serial,RecreatedStyle(black,false,df));for(int k=0;k<6;k++)set(work,r,k+3,metric(kinds[k],serial,"$B"+r,who,true),k==2?blue:black,false,false);}group(work,summary+1,ar-1,"",false);
+                foreach(double serial in days.Where(d=>owners(d).Contains(who))){int r=ar++;work.Set(r,2,serial,RecreatedStyle(black,false,df));for(int k=0;k<6;k++){var v=metric(kinds[k],serial,"$B"+r,who,true);work.Set(r,k+3,serial>asOf.ToOADate()?(object)"":v.Item1,RecreatedStyle(k==2?blue:black,false,1),"IF($B"+r+">"+cutoff+",\"\","+v.Item2+")");}}group(work,summary+1,ar-1,"",false);
             }work.Set(alt+2,1,"Этап 1",plain);if(ar>alt+3)wm.Add("A"+(alt+2)+":A"+(ar-1));TableEdges(work,alt+1,ar-1,8);
             // Keep the user's free-form notes from the old report, without copying its old tables.
             var notes=new List<string>();if(previous!=null)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c")){if(cell.Element(N+"f")!=null)continue;string text=Text(Value(cell));if(text.StartsWith("Примечание",StringComparison.OrdinalIgnoreCase)||text.StartsWith("Примечания",StringComparison.OrdinalIgnoreCase))notes.Add(text);}
             foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,plain);mm.Add("A"+r+":S"+r);mr+=2;}
             if(notes.Count>0)SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+mr});
-            SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,16),Col(3,Math.Max(8,ww),9)},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)});
+            SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,16),Col(3,Math.Max(8,ww),ReportColumnWidth(8.9,ReportMaximumDigitWidth(result)))},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)});
         }
     }
 }
