@@ -1,7 +1,7 @@
 using System.Reflection;
 [assembly: AssemblyTitle("Свод проверки")]
-[assembly: AssemblyVersion("1.5.6.0")]
-[assembly: AssemblyFileVersion("1.5.6.0")]
+[assembly: AssemblyVersion("1.5.7.0")]
+[assembly: AssemblyFileVersion("1.5.7.0")]
 namespace DesktopUpdates {
     internal static class AppInfo {
         public const string Repository="debug23win/review-merge",Product="review-merge",Asset="review-merge-windows.zip",Executable="Свод_проверки.exe";

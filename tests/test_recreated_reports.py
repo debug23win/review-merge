@@ -15,6 +15,37 @@ MAIN = 'Все загруженные файлы'
 NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 AS_OF = datetime(2026, 10, 4)
 EDGES = ('left', 'right', 'top', 'bottom')
+EXCLUDED_REVIEWERS = {'Громов', 'Громов Григорий Григорьевич', 'Зорина', 'Дьяков', 'Егоров'}
+
+
+def assert_report_reviewers(book, included, excluded):
+    """Filtering applies to every generated report, not to preserved source rows."""
+    for name in REPORTS:
+        labels = {cell.value for row in book[name] for cell in row
+                  if isinstance(cell.value, str) and cell.data_type != 'f'}
+        assert set(included) <= labels, (name, 'missing qualified reviewers', set(included) - labels)
+        assert not set(excluded) & labels, (name, 'unqualified reviewers remain', set(excluded) & labels)
+    dates = [cell.value for cell in book['СВОД']['B'] if isinstance(cell.value, datetime)]
+    first_names = [book['СВОД'].cell(row, 2).value for row in range(8, 8 + len(included))]
+    for name in ('Стат. по типам', 'Стат. по зам.'):
+        sheet = book[name]
+        # The remarks sheet has another table below; date blocks end before its
+        # "Вид документации" header. Only the first table contains date cells.
+        assert [cell.value for cell in sheet['B'] if isinstance(cell.value, datetime)] == dates
+        for index, date in enumerate(dates):
+            start = 6 + index * (len(included) + 1)
+            assert sheet.cell(start, 2).value == date, (name, date, start)
+            names = [sheet.cell(row, 2).value
+                     for row in range(start + 1, start + len(included) + 1)]
+            assert names == first_names and set(names) == set(included), (name, date, names)
+            for offset, reviewer in enumerate(names, 1):
+                row = start + offset
+                assert sheet.row_dimensions[row].outlineLevel == 1, (name, reviewer, date)
+                # Personal statistics stay daily even though every qualified
+                # person is now shown on dates when they did no work.
+                columns = range(3, 19, 2) if name == 'Стат. по типам' else (5, 7, 9, 11, 13, 15)
+                for column in columns:
+                    assert_day_formula(sheet.cell(row, column).value, '$B$%d' % start, cumulative=False)
 
 
 def assert_unframed(sheet, first=1, last=3, width=None):
@@ -38,11 +69,23 @@ def sheet_xml(path, name):
         return ET.fromstring(archive.read(member))
 
 
-def column_width(doc, column):
+def serialized_column_width(doc, column):
     matches = [node for node in doc.findall('s:cols/s:col', NS)
                if int(node.get('min')) <= column <= int(node.get('max'))]
     assert len(matches) == 1, (column, matches)
     return float(matches[0].get('width'))
+
+
+def excel_display_column_width(serialized, maximum_digit_width):
+    """OOXML widths include pixel padding; Excel's width dialog does not.
+
+    Keep this inverse conversion independent of the production serializer. The
+    caller supplies the Normal font's maximum digit width at 96 dpi; report cell
+    fonts do not determine the column-width unit.
+    """
+    padding = 2 * math.ceil(maximum_digit_width / 4) + 1
+    pixels = math.floor(serialized * maximum_digit_width + 0.5)
+    return math.floor((pixels - padding) / maximum_digit_width * 100 + 0.5) / 100
 
 
 def assert_cached(formulas, cached, row, column, expected):
@@ -94,9 +137,9 @@ def report_snapshot(path):
     cached.close()
     return result
 
-def run(output, source):
+def run(output, source, as_of=AS_OF):
     subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output),
-                    '2026-10-04', MAIN, str(source)], check=True, timeout=90)
+                    as_of.strftime('%Y-%m-%d'), MAIN, str(source)], check=True, timeout=90)
 
 def validate(path):
     w = load_workbook(path)
@@ -169,6 +212,9 @@ def test_layout_migration():
 def artificial_source(path, empty=False):
     """Use real register headers with entirely artificial, deterministic review rows."""
     book = load_workbook(ROOT / 'tests/fixtures/Анна.xlsx')
+    # Widths are measured against Normal, not the Times New Roman report cells.
+    # Courier New 12 has a deterministic maximum digit width of 10 px at 96 dpi.
+    book._named_styles['Normal'].font = Font(name='Courier New', size=12)
     main = book[MAIN]
     main.delete_rows(7, main.max_row)
     for sheet in list(book):
@@ -185,6 +231,7 @@ def artificial_source(path, empty=False):
     ref['A1'], ref['B1'] = 'Коробов получено', 20
     ref['A2'], ref['B2'] = 'Томов по проекту акта', 100
     ref['A8'] = 'ФИО проверяющего'
+    ref['A6'] = 'Примечание: сохранить сведения из исходной справки'
     ref['A42'], ref['A43'] = 'ИТОГО проверено коробов', 'ИТОГО проверено томов'
     if empty:
         records = [('Без проверки', None, None, 11)]
@@ -201,6 +248,9 @@ def artificial_source(path, empty=False):
             ('Без даты', 'Зорина', None, 15),  # Reviewer exists, but has no dated work.
             ('Без проверяющего', None, None, 16),
             ('Отдельный-ИУЛ', 'Борис', 2, 17),  # A checked file/box, never a volume.
+            ('Служебный-ИУЛ', 'Дьяков', 2, 18),  # No completed volume in this reviewer's history.
+            ('Незавершенный_Часть1', 'Егоров', 2, 19),
+            ('Незавершенный_Часть2', None, None, 19),  # The shared volume is incomplete.
         ]
     for row, (filename, reviewer, day, box) in enumerate(records, 7):
         for column, value in {1: row - 6, 2: 'Искусственный раздел', 3: filename,
@@ -220,7 +270,7 @@ def artificial_source(path, empty=False):
     return dates
 
 
-def assert_matrix_layout(path, sheet, reviewers, dates):
+def assert_matrix_layout(path, sheet, reviewers, dates, maximum_digit_width=10):
     """Two columns per reviewer plus a real, final two-column ВСЕГО group."""
     end = 4 + 2 * len(reviewers)
     total = end - 1
@@ -230,6 +280,9 @@ def assert_matrix_layout(path, sheet, reviewers, dates):
     assert headers['ВСЕГО'] == total, headers
     assert sheet['B6'].value == 'Всего'
     assert len(headers) == len(reviewers) + 1
+    normal = sheet.parent._named_styles['Normal'].font
+    assert normal.name == 'Courier New' and normal.sz == 12, normal
+    assert sheet['C5'].font.name == 'Times New Roman', sheet['C5'].font
     merges = set(map(str, sheet.merged_cells.ranges))
     assert 'A1:' + letter(end) + '1' in merges
     assert 'A4:A5' in merges and 'B4:B5' in merges
@@ -243,8 +296,17 @@ def assert_matrix_layout(path, sheet, reviewers, dates):
             assert sheet.cell(row, column + 1).border.left.style == 'thin'
     # Inspect actual OOXML col intervals: openpyxl does not expand grouped widths.
     doc = sheet_xml(path, sheet.title)
-    for column in range(3, end + 1):
-        assert column_width(doc, column) == 9, (column, column_width(doc, column))
+    widths = [serialized_column_width(doc, column) for column in range(3, end + 1)]
+    assert len(set(widths)) == 1, widths
+    target_chars = 8.9
+    padding = 2 * math.ceil(maximum_digit_width / 4) + 1
+    expected_pixels = math.floor(target_chars * maximum_digit_width + padding + 0.5)
+    expected_raw = math.floor(expected_pixels / maximum_digit_width * 256) / 256
+    for column, raw in enumerate(widths, 3):
+        display = excel_display_column_width(raw, maximum_digit_width)
+        assert raw == expected_raw, (column, raw, expected_raw, 'serialized OOXML width')
+        assert display == target_chars, (column, raw, display, 'calculated Excel UI width')
+    assert expected_raw == 9.59765625 and expected_pixels == 96
     assert doc.find('s:dimension', NS).get('ref').split(':')[-1].rstrip('0123456789') == letter(max(8, end))
     areas = str(sheet.print_area)
     assert '$A$1:$%s$%d' % (letter(end), last) in areas, areas
@@ -277,29 +339,37 @@ def test_reviewer_histories_and_global_totals():
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     run(target, source)
     book, cached = load_workbook(target), load_workbook(target, data_only=True)
-    reviewers = {'Анна', 'Борис', 'Вера', 'Громов', 'Зорина'}
+    reviewers = {'Анна', 'Борис', 'Вера'}
     summary, summary_values = book['СВОД'], cached['СВОД']
     work, work_values = book['Итоги работы'], cached['Итоги работы']
     for name in REPORTS:
         assert_unframed(book[name])
     header = assert_matrix_layout(target, work, reviewers, dates)
-    assert not any(cell.value == 'Громов Григорий Григорьевич' for row in work for cell in row), (
-        'Reference-only reviewer must use the same surname label as other reports')
+    assert_report_reviewers(book, reviewers, EXCLUDED_REVIEWERS)
+    # October 4 is idle for everyone: these personal statistics must remain
+    # daily zeros while the main report's checked columns stay cumulative.
+    idle_start = 6 + dates.index(AS_OF) * (len(reviewers) + 1)
+    for row in range(idle_start + 1, idle_start + len(reviewers) + 1):
+        for column in (5, 7, 9, 11, 13, 15):
+            assert_cached(book['Стат. по зам.'], cached['Стат. по зам.'], row, column, 0)
+        for column in range(3, 23, 2):
+            assert_cached(book['Стат. по типам'], cached['Стат. по типам'], row, column, 0)
     # Expected unique completions: box 11 first counted for Anna on October 1;
     # its two-part/ИУЛ volume counted once for Boris on October 2. A standalone
-    # ИУЛ is never a volume. Reviewer without a valid date contributes zero.
+    # ИУЛ is never a volume. The two excluded dated-file reviewers add boxes
+    # to global totals, but have no completed volumes and no personal columns.
     daily = {
         1: {'Анна': (2, 1)},
         2: {'Борис': (1, 2)},
         3: {'Анна': (1, 1)},
         4: {},
     }
-    global_daily = {1: (2, 1), 2: (1, 2), 3: (1, 1), 4: (0, 0)}
+    global_daily = {1: (2, 1), 2: (3, 2), 3: (1, 1), 4: (0, 0)}
     cumulative = {name: [0, 0] for name in reviewers}
     global_cumulative = [0, 0]
     assert summary.max_row == 6 + len(dates) * (len(reviewers) + 1)
     assert summary.max_column == 19
-    assert sheet_xml(target, 'СВОД').find('s:dimension', NS).get('ref') == 'A1:S36'
+    assert sheet_xml(target, 'СВОД').find('s:dimension', NS).get('ref') == 'A1:S26'
     seen = []
     for index, date in enumerate(dates):
         row = 7 + index * (len(reviewers) + 1)
@@ -330,9 +400,6 @@ def test_reviewer_histories_and_global_totals():
                                              else daily[date.day].get(name, (0, 0))[kind])
                 formula = assert_cached(summary, summary_values, r, 8 + kind * 2, None if future else done)
                 assert_day_formula(formula, anchor, cumulative=True)
-                if name == 'Громов':
-                    criterion = 'Громов Григорий Григорьевич' if kind == 0 else 'Громов'
-                    assert '"' + criterion + '"' in formula, formula
                 assert_cached(summary, summary_values, r, 9 + kind * 2,
                               None if future else done / denominator * 100)
                 formula = assert_cached(summary, summary_values, r, 16 + kind * 2, today)
@@ -364,12 +431,16 @@ def test_reviewer_histories_and_global_totals():
             assert work.cell(6, column + kind).font.bold
             if name == 'ВСЕГО':
                 assert all('"' + who + '"' not in formula for who in reviewers), formula
-    assert tuple(global_cumulative) == (4, 4)
+    assert tuple(global_cumulative) == (6, 4)
+    assert sum(counts[0] for counts in cumulative.values()) == 4, (
+        'Global box count includes the two excluded reviewers; summing displayed columns is wrong')
     assert tuple(cumulative['Анна']) == (3, 2)
     assert tuple(cumulative['Борис']) == (1, 2)
     # Source received totals remain independent of the reviewed global totals.
     assert cached['Справка по томам']['B1'].value == 20
     assert cached['Справка по томам']['B2'].value == 100
+    assert cached['Справка по томам']['A12'].value == 'Громов Григорий Григорьевич'
+    assert cached['Справка по томам']['A6'].value == 'Примечание: сохранить сведения из исходной справки'
     book.close()
     cached.close()
     before = report_snapshot(target)
@@ -422,10 +493,12 @@ def test_same_surname_reference_reviewer():
     book.close()
     run(target, source)
     book, cached = load_workbook(target), load_workbook(target, data_only=True)
-    reviewers = {active, idle, 'Борис', 'Вера', 'Зорина'}
+    reviewers = {active, 'Борис', 'Вера'}
     headers = assert_matrix_layout(target, book['Итоги работы'], reviewers, dates)
-    assert 'Иванов' not in headers
-    for name, expected in ((active, (3, 2)), (idle, (0, 0))):
+    assert 'Иванов' not in headers and idle not in headers
+    assert_report_reviewers(book, reviewers, EXCLUDED_REVIEWERS | {idle, 'Иванов'})
+    assert cached['Справка по томам']['A12'].value == idle
+    for name, expected in ((active, (3, 2)),):
         for kind in range(2):
             formula = assert_cached(book['Итоги работы'], cached['Итоги работы'],
                                     6, headers[name] + kind, expected[kind])
@@ -435,10 +508,84 @@ def test_same_surname_reference_reviewer():
         start = 7 + index * (len(reviewers) + 1)
         rows = {summary.cell(row, 2).value: row for row in range(start + 1, start + len(reviewers) + 1)}
         assert set(rows) == reviewers, rows
+        assert idle not in rows
         for column in (8, 10, 16, 18):
-            formula = assert_cached(summary, cached['СВОД'], rows[idle], column,
-                                    None if date > AS_OF else 0)
-            assert '"' + idle + '"' in formula, formula
+            formula = summary.cell(rows[active], column).value
+            assert '"' + active + '"' in formula and '"' + idle + '"' not in formula, formula
+    book.close()
+    cached.close()
+
+
+def test_lifetime_reviewers_do_not_depend_on_as_of():
+    """Future completed work qualifies a reviewer before that work is reportable."""
+    source = B / 'lifetime-reviewers-source.xlsx'
+    dates = artificial_source(source)
+    reviewers = {'Анна', 'Борис', 'Вера'}
+    for as_of in (datetime(2026, 10, 1), datetime(2026, 10, 6)):
+        target = B / ('lifetime-reviewers-%s.xlsx' % as_of.strftime('%Y%m%d'))
+        run(target, source, as_of)
+        book, cached = load_workbook(target), load_workbook(target, data_only=True)
+        expected_dates = sorted(set(dates + [as_of]))
+        headers = assert_matrix_layout(target, book['Итоги работы'], reviewers, expected_dates)
+        assert_report_reviewers(book, reviewers, EXCLUDED_REVIEWERS)
+        summary = book['СВОД']
+        assert summary.max_row == 6 + len(expected_dates) * (len(reviewers) + 1)
+        for index, date in enumerate(expected_dates):
+            start = 7 + index * (len(reviewers) + 1)
+            assert summary.cell(start, 2).value == date
+            rows = {summary.cell(row, 2).value: row
+                    for row in range(start + 1, start + len(reviewers) + 1)}
+            assert set(rows) == reviewers, (as_of, date, rows)
+            for name in reviewers:
+                if date > as_of:
+                    for column in (8, 9, 10, 11, 16, 17, 18, 19):
+                        assert_cached(summary, cached['СВОД'], rows[name], column, None)
+        # Vera has exactly one volume, completed on October 5. Earlier reports
+        # still show her lifetime-qualified column with zero as-of totals.
+        for kind in range(2):
+            assert_cached(book['Итоги работы'], cached['Итоги работы'], 6,
+                          headers['Вера'] + kind, 0 if as_of.day == 1 else 1)
+        work = book['Итоги работы']
+        alternative = next(cell.row for cell in work['A']
+                           if cell.value == 'Альтернативное представление по проверяющим')
+        for row in range(alternative + 2, work.max_row + 1):
+            date = work.cell(row, 2).value
+            if isinstance(date, datetime) and date > as_of:
+                for column in range(3, 9):
+                    formula = assert_cached(work, cached['Итоги работы'], row, column, None)
+                    assert formula.startswith('=IF($B%d>' % row), formula
+        book.close()
+        cached.close()
+
+
+def test_only_unqualified_reviewers():
+    """Named reviewed files alone must not create a reviewer table column or row."""
+    source, target = B / 'unqualified-source.xlsx', B / 'unqualified.xlsx'
+    dates = artificial_source(source)
+    book = load_workbook(source)
+    main = book[MAIN]
+    keep = {'Без даты', 'Без проверяющего', 'Служебный-ИУЛ',
+            'Незавершенный_Часть1', 'Незавершенный_Часть2'}
+    for row in range(main.max_row, 6, -1):
+        if main.cell(row, 3).value not in keep:
+            main.delete_rows(row)
+    book.save(source)
+    book.close()
+    run(target, source)
+    book, cached = load_workbook(target), load_workbook(target, data_only=True)
+    headers = assert_matrix_layout(target, book['Итоги работы'], set(), dates)
+    assert headers == {'ВСЕГО': 3}
+    assert_report_reviewers(book, set(), EXCLUDED_REVIEWERS | {'Анна', 'Борис', 'Вера'})
+    assert_cached(book['Итоги работы'], cached['Итоги работы'], 6, 3, 2)
+    assert_cached(book['Итоги работы'], cached['Итоги работы'], 6, 4, 0)
+    summary = book['СВОД']
+    assert summary.max_row == 6 + len(dates)
+    assert [summary.cell(row, 2).value for row in range(7, summary.max_row + 1)] == dates
+    assert not any(dim.outlineLevel for dim in summary.row_dimensions.values())
+    as_of_row = 7 + dates.index(AS_OF)
+    assert_cached(summary, cached['СВОД'], as_of_row, 8, 2)
+    assert_cached(summary, cached['СВОД'], as_of_row, 10, 0)
+    assert cached['Справка по томам']['A12'].value == 'Громов Григорий Григорьевич'
     book.close()
     cached.close()
 
@@ -448,7 +595,10 @@ if __name__ == '__main__':
     test_reviewer_histories_and_global_totals()
     test_no_reviewers()
     test_same_surname_reference_reviewer()
+    test_lifetime_reviewers_do_not_depend_on_as_of()
+    test_only_unqualified_reviewers()
     print('Report recreation passed: old/absent/custom layouts; all-date cumulative reviewer rows; '
-          'daily and unique global cached totals; future dates; reference-only/undated/zero reviewers; namesakes; '
+          'daily and unique global cached totals; future dates; lifetime completed-volume filtering; '
+          'reference-only/undated/ИУЛ-only/incomplete/zero reviewers; namesakes; '
           'widths, merged groups, borders, unwrapped captions and repeat merge')
     print(B)
