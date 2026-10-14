@@ -151,7 +151,7 @@ namespace ReviewMerge {
             foreach(var pair in map)layout.Names[pair.Key]=pair.Value.Name;
             layout.NameTable.AddRange(layout.Names);layout.NameTable.AddRange(layout.People.Values.Where(v=>!layout.Names.ContainsKey(v)).Select(v=>new KeyValuePair<string,string>(v,v)));
             // Statistics show the surname; the full name only when two different people share it.
-            var used=layout.Names.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var used=layout.Names.Values.Concat(layout.People.Values).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             foreach(string who in used){string surname=Rules.Surname(who);layout.StatKeys[who]=surname==""||used.Count(o=>Rules.SurnameKey(o)==Rules.SurnameKey(who))>1?who:surname;}
             var keys=new List<List<string>>();
             for(int i=0;i<result.Rows.Count;i++){string raw=Rules.CleanName(result.Rows[i].Values[8]),who;if(!layout.Names.TryGetValue(raw,out who))who=raw;var boxes=Rules.BoxKeys(result.Rows[i].Values[10],result.Rows[i].Values[11]);keys.Add(boxes);layout.BoxFiles.Add(new VolumeRecord{Boxes=boxes,List=Rules.BoxList(boxes),Who=who,Date=dates[i]});}
