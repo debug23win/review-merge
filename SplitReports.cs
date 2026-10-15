@@ -27,8 +27,8 @@ namespace ReviewMerge {
             return doc.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>XlsxReader.Normal(Value(r.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==1))).Contains(text))
                 .Select(r=>(int)r.Attribute("r")).FirstOrDefault();
         }
-        int ReportStyle(int original,string left=null,string right=null,string top=null,string bottom=null,string color=null,bool? bold=null,int? number=null,int? size=null) {
-            string key=original+"|"+left+"|"+right+"|"+top+"|"+bottom+"|"+color+"|"+bold+"|"+number+"|"+size;int found;if(reportStyleCache.TryGetValue(key,out found))return found;
+        int ReportStyle(int original,string left=null,string right=null,string top=null,string bottom=null,string color=null,bool? bold=null,int? number=null,int? size=null,bool? italic=null) {
+            string key=original+"|"+left+"|"+right+"|"+top+"|"+bottom+"|"+color+"|"+bold+"|"+number+"|"+size+"|"+italic;int found;if(reportStyleCache.TryGetValue(key,out found))return found;
             var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(original));
             if(left!=null||right!=null||top!=null||bottom!=null){
                 var borders=styles.Root.Element(N+"borders");var border=new XElement(borders.Elements().ElementAt((int?)xf.Attribute("borderId")??0));
@@ -36,10 +36,11 @@ namespace ReviewMerge {
                 for(int i=0;i<4;i++)if(values[i]!=null){var e=border.Element(N+edges[i]);var replacement=new XElement(N+edges[i],new XAttribute("style",values[i]),new XElement(N+"color",new XAttribute("rgb","FF000000")));if(e==null)border.Add(replacement);else e.ReplaceWith(replacement);}
                 int id=borders.Elements().Count();borders.Add(border);borders.SetAttributeValue("count",id+1);xf.SetAttributeValue("borderId",id);xf.SetAttributeValue("applyBorder",1);
             }
-            if(color!=null||bold.HasValue||size.HasValue){
+            if(color!=null||bold.HasValue||size.HasValue||italic.HasValue){
                 var fonts=styles.Root.Element(N+"fonts");var font=new XElement(fonts.Elements().ElementAt((int?)xf.Attribute("fontId")??0));
                 if(color!=null){font.Elements(N+"color").Remove();font.Add(new XElement(N+"color",new XAttribute("rgb",color)));}
                 if(bold.HasValue){font.Elements(N+"b").Remove();if(bold.Value)font.AddFirst(new XElement(N+"b"));}
+                if(italic.HasValue){font.Elements(N+"i").Remove();if(italic.Value){var b=font.Element(N+"b");if(b!=null)b.AddAfterSelf(new XElement(N+"i"));else font.AddFirst(new XElement(N+"i"));}}
                 if(size.HasValue){font.Elements(N+"sz").Remove();font.Add(new XElement(N+"sz",new XAttribute("val",size.Value)));}
                 int id=fonts.Elements().Count();fonts.Add(font);fonts.SetAttributeValue("count",id+1);xf.SetAttributeValue("fontId",id);xf.SetAttributeValue("applyFont",1);
             }

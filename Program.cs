@@ -16,6 +16,8 @@ namespace ReviewMerge {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
+                // --pdf книга.xlsx yyyy-MM-dd: the two-page PDF of an existing workbook, without a build.
+                if(args.Length==3&&args[0]=="--pdf"){Console.WriteLine(PdfReport.Write(Path.GetFullPath(args[1]),DateTime.ParseExact(args[2],"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture)));return 0;}
                 if (args.Length > 0 && args[0] == "--batch") {
                     // Options of the batch mode answer every question with "yes": --match-surnames merges people with one surname, --fill-incomplete fills the remaining rows of partly checked boxes.
                     string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns","--keep-legacy-report"};
@@ -28,7 +30,7 @@ namespace ReviewMerge {
                     var logs = new List<string>();
                     var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
                     var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.DatesAssignedToday, result.FilledRows, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count,
-                        IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.Output, Log=logs };
+                        IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.Output, result.Pdf, result.PdfError, Log=logs };
                     File.WriteAllText(args[1]+".run.json", new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
                     return 0;
                 }
@@ -42,7 +44,7 @@ namespace ReviewMerge {
                 }
                 Application.Run(new MainForm()); return 0;
             } catch(Exception ex) {
-                if(args.Length>1 && args[0]=="--batch") File.WriteAllText(args[1]+".error.txt",ex.ToString(),Encoding.UTF8);
+                if(args.Length>1 && (args[0]=="--batch"||args[0]=="--pdf")) File.WriteAllText(args[1]+".error.txt",ex.ToString(),Encoding.UTF8);
                 else MessageBox.Show(ex.Message,"Свод проверки",MessageBoxButtons.OK,MessageBoxIcon.Error);
                 return 1;
             }
@@ -162,7 +164,7 @@ namespace ReviewMerge {
                 try {
                     var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token,options);
                     Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text="Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Коробов проверено не полностью: "+result.IncompleteBoxes.Count+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
-                        Append("Дополнен сводный документ: "+result.Output);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
+                        Append("Дополнен сводный документ: "+result.Output);if(result.Pdf!=null)Append("Создан PDF: "+result.Pdf);else if(result.PdfError!=null)Append("PDF не создан: "+result.PdfError);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
                         foreach(var v in result.FilledBoxes)Append("Заполнены без замечаний остальные строки. "+v);foreach(var v in result.IncompleteBoxes)Append("Проверено не полностью, неотмеченные тома не входят в статистику. "+v);
                         foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
                 } catch(OperationCanceledException) {Ui(()=>{Append("Сборка отменена. Итоговый файл не заменён.");Busy(false);cancellation.Dispose();cancellation=null;});}
