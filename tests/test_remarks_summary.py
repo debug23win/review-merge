@@ -20,6 +20,7 @@ def book(path, documents):
 
 
 def build(output, *sources):
+    """Sources may include switches such as --remarks-without-borders."""
     subprocess.run([str(EXE), '--batch', str(output), '2026-10-04', MAIN, str(output), *map(str, sources)], check=True, timeout=120)
     return json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 
@@ -30,19 +31,22 @@ def rows(path):
     return {m.cell(r, 3).value: r for r in range(7, m.max_row + 1) if m.cell(r, 3).value}
 
 
-def remarks(path):
-    """The three boxes under the «СВОД» table: cached texts, formulas, merges and colors."""
+def remarks(path, framed=True):
+    """The three boxes right above the «СВОД» table: cached texts, formulas, merges, colors and frames."""
     cached, formulas = load_workbook(path, data_only=True)['СВОД'], load_workbook(path)['СВОД']
-    row = next(r for r in range(7, formulas.max_row + 1) if str(cached.cell(r, 4).value or '').startswith('Всего томов с замечаниями'))
+    row = next(r for r in range(1, formulas.max_row + 1) if str(cached.cell(r, 4).value or '').startswith('Всего томов с замечаниями'))
+    assert row == 4 and formulas.cell(5, 1).value == 'Этап' and formulas.cell(5, 4).value == 'Всего', 'the boxes are right above the table'
+    edges = [getattr(formulas.cell(row, c).border, e).style for c in range(4, 16) for e in ('left', 'right', 'top', 'bottom')]
+    if framed: assert all(formulas.cell(row, c).border.top.style == 'thin' and formulas.cell(row, c).border.bottom.style == 'thin' for c in range(4, 16)), edges
+    else: assert all(e in (None, 'none') for e in edges), ('plain text without frames', edges)
     merges = set(map(str, formulas.merged_cells.ranges))
     for first in (4, 8, 12):
         assert '%s%d:%s%d' % (chr(64 + first), row, chr(64 + first + 3), row) in merges, (first, row)
     colors = [formulas.cell(row, c).font.color.rgb for c in (4, 8, 12)]
     assert colors == ['FF996600', 'FF00B050', 'FFFF0000'] and all(formulas.cell(row, c).font.b for c in (4, 8, 12)), colors
     assert all(formulas.cell(row, c).value.startswith('="') and 'COUNTIFS(' in formulas.cell(row, c).value for c in (4, 8, 12))
-    assert formulas.cell(row - 1, 2).value in ('Анна', 'Борис'), 'the boxes are right under the table'
     area = formulas.print_area if isinstance(formulas.print_area, str) else ','.join(formulas.print_area)
-    assert area.split(',')[0].endswith('$S$%d' % row), (area, row)
+    assert '$A$1:$S$%d' % formulas.max_row in area.split(',')[0], (area, formulas.max_row)
     return [cached.cell(row, c).value for c in (4, 8, 12)]
 
 
@@ -93,9 +97,13 @@ open_cell = reference.cell(7, heads['Замечание не устранено'
 assert open_cell.startswith('=IF(') and "'Все загруженные файлы'!V" in open_cell and '"НЕТ"' in open_cell, open_cell
 assert reference.cell(7, heads['Замечания тома устранены']).value.startswith('=IF(AND(')
 
+# The option prints the same values as plain text, without frames.
+build(output, '--remarks-without-borders')
+assert remarks(output, framed=False) == ['Всего томов с замечаниями: 3', 'Устранено замечаний по томам: 3', 'Устраняется томов с замечаниями: 0']
+
 # The work totals title is not merged; the PDF shows the boxes on the first page.
 work = load_workbook(output)['Итоги работы']
 assert not any(str(x).startswith('A1:') for x in work.merged_cells.ranges) and work['A1'].alignment.horizontal == 'left'
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 assert report['PdfError'] is None and Path(report['Pdf']).exists(), report
-print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, boxes under the summary table, formulas and unmerged title')
+print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, boxes above the summary table with or without frames, formulas and unmerged title')

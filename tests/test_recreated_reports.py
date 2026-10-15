@@ -26,7 +26,8 @@ def assert_report_reviewers(book, included, excluded):
         assert set(included) <= labels, (name, 'missing qualified reviewers', set(included) - labels)
         assert not set(excluded) & labels, (name, 'unqualified reviewers remain', set(excluded) & labels)
     dates = [cell.value for cell in book['СВОД']['B'] if isinstance(cell.value, datetime)]
-    first_names = [book['СВОД'].cell(row, 2).value for row in range(8, 8 + len(included))]
+    # «СВОД»: the first date is in row 8, its reviewers below it.
+    first_names = [book['СВОД'].cell(row, 2).value for row in range(9, 9 + len(included))]
     for name in ('Стат. по типам', 'Стат. по зам.'):
         sheet = book[name]
         # The remarks sheet has another table below; date blocks end before its
@@ -145,10 +146,11 @@ def validate(path):
     w = load_workbook(path)
     assert REPORTS <= set(w.sheetnames), w.sheetnames
     assert 'Свод' not in w.sheetnames
-    assert w['СВОД']['D4'].value == 'Всего'
-    assert w['СВОД']['H4'].value == 'Проверено'
-    assert w['СВОД']['L4'].value == 'Осталось проверить'
-    assert w['СВОД']['P4'].value == 'Проверено за сутки'
+    # Row 4 of «СВОД» holds the volumes with remarks; the table header starts at row 5.
+    assert w['СВОД']['D5'].value == 'Всего'
+    assert w['СВОД']['H5'].value == 'Проверено'
+    assert w['СВОД']['L5'].value == 'Осталось проверить'
+    assert w['СВОД']['P5'].value == 'Проверено за сутки'
     assert w['Стат. по зам.']['A1'].value == 'СТАТИСТИКА ПО ЗАМЕЧАНИЯМ'
     assert w['Итоги работы']['A1'].value == 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ'
     assert w['Итоги работы']['C5'].value == 'коробов'
@@ -156,7 +158,8 @@ def validate(path):
     for tab in REPORTS:
         s = w[tab]
         assert_unframed(s)
-        assert s['A4'].value == 'Этап' and s['A4'].border.top.style == 'thick'
+        header = 'A5' if tab == 'СВОД' else 'A4'
+        assert s[header].value == 'Этап' and s[header].border.top.style == 'thick', (tab, header)
         assert s.print_area and s.page_setup.orientation == 'landscape'
         assert s['A1'].font.name == 'Times New Roman'
         for row in s:
@@ -270,10 +273,11 @@ def artificial_source(path, empty=False):
     return dates
 
 
-def assert_remarks_row(summary, row):
-    """The volumes with remarks are in the row right under the «СВОД» table, the last row of the sheet."""
-    text = str(summary.cell(row, 4).value)
-    assert summary.max_row == row and text.startswith('="Всего томов с замечаниями: "'), (row, summary.max_row, text)
+def assert_remarks_row(summary, last):
+    """The volumes with remarks are in row 4, right above the «СВОД» table; the table ends at the last row of the sheet."""
+    text = str(summary.cell(4, 4).value)
+    assert summary.max_row == last and text.startswith('="Всего томов с замечаниями: "'), (last, summary.max_row, text)
+    assert summary.cell(5, 1).value == 'Этап' and summary.cell(8, 1).value == 'Этап 1'
 
 
 def assert_matrix_layout(path, sheet, reviewers, dates, maximum_digit_width=10):
@@ -380,7 +384,7 @@ def test_reviewer_histories_and_global_totals():
     assert sheet_xml(target, 'СВОД').find('s:dimension', NS).get('ref') == 'A1:S27'
     seen = []
     for index, date in enumerate(dates):
-        row = 7 + index * (len(reviewers) + 1)
+        row = 8 + index * (len(reviewers) + 1)
         assert summary.cell(row, 2).value == date
         assert summary.cell(row, 2).font.bold
         names = [summary.cell(r, 2).value for r in range(row + 1, row + len(reviewers) + 1)]
@@ -475,15 +479,15 @@ def test_no_reviewers():
     summary = book['СВОД']
     assert_remarks_row(summary, 8)
     assert summary.max_column == 19
-    assert summary['B7'].value == AS_OF
-    assert not summary.row_dimensions[7].outlineLevel
+    assert summary['B8'].value == AS_OF
+    assert not summary.row_dimensions[8].outlineLevel
     assert not any(d.outlineLevel for d in summary.row_dimensions.values())
     for column in (8, 9, 10, 11, 16, 17, 18, 19):
-        assert_cached(summary, cached['СВОД'], 7, column, 0)
-    assert_cached(summary, cached['СВОД'], 7, 4, 20)
-    assert_cached(summary, cached['СВОД'], 7, 6, 100)
-    assert_cached(summary, cached['СВОД'], 7, 12, 20)
-    assert_cached(summary, cached['СВОД'], 7, 14, 100)
+        assert_cached(summary, cached['СВОД'], 8, column, 0)
+    assert_cached(summary, cached['СВОД'], 8, 4, 20)
+    assert_cached(summary, cached['СВОД'], 8, 6, 100)
+    assert_cached(summary, cached['СВОД'], 8, 12, 20)
+    assert_cached(summary, cached['СВОД'], 8, 14, 100)
     for name in REPORTS:
         assert_unframed(book[name])
     book.close()
@@ -519,7 +523,7 @@ def test_same_surname_reference_reviewer():
             assert '"' + name + '"' in formula, formula
     summary = book['СВОД']
     for index, date in enumerate(dates):
-        start = 7 + index * (len(reviewers) + 1)
+        start = 8 + index * (len(reviewers) + 1)
         rows = {summary.cell(row, 2).value: row for row in range(start + 1, start + len(reviewers) + 1)}
         assert set(rows) == reviewers, rows
         assert idle not in rows
@@ -545,7 +549,7 @@ def test_lifetime_reviewers_do_not_depend_on_as_of():
         summary = book['СВОД']
         assert_remarks_row(summary, 7 + len(expected_dates) * (len(reviewers) + 1))
         for index, date in enumerate(expected_dates):
-            start = 7 + index * (len(reviewers) + 1)
+            start = 8 + index * (len(reviewers) + 1)
             assert summary.cell(start, 2).value == date
             rows = {summary.cell(row, 2).value: row
                     for row in range(start + 1, start + len(reviewers) + 1)}
@@ -594,9 +598,9 @@ def test_only_unqualified_reviewers():
     assert_cached(book['Итоги работы'], cached['Итоги работы'], 6, 4, 0)
     summary = book['СВОД']
     assert_remarks_row(summary, 7 + len(dates))
-    assert [summary.cell(row, 2).value for row in range(7, summary.max_row)] == dates
+    assert [summary.cell(row, 2).value for row in range(8, summary.max_row + 1)] == dates
     assert not any(dim.outlineLevel for dim in summary.row_dimensions.values())
-    as_of_row = 7 + dates.index(AS_OF)
+    as_of_row = 8 + dates.index(AS_OF)
     assert_cached(summary, cached['СВОД'], as_of_row, 8, 2)
     assert_cached(summary, cached['СВОД'], as_of_row, 10, 0)
     assert cached['Справка по томам']['A12'].value == 'Громов Григорий Григорьевич'

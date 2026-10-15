@@ -79,13 +79,13 @@ assert work.cell(6, 2).value == 'Всего' and work.cell(6, work.max_column).v
 
 summary = load_workbook(output)['СВОД']
 for col in range(5, 20, 2):
-    font = summary.cell(7, col).font
+    font = summary.cell(8, col).font
     assert font.i and font.sz == 9, (col, font.i, font.sz, 'percentages are italic, size 9')
-    count = summary.cell(7, col - 1).font
+    count = summary.cell(8, col - 1).font
     assert not count.i and count.sz == 12, (col - 1, count.i, count.sz, 'counts keep their font')
-assert summary.cell(7, 9).font.color.rgb == summary.cell(7, 8).font.color.rgb, 'percentages keep the color of their block'
+assert summary.cell(8, 9).font.color.rgb == summary.cell(8, 8).font.color.rgb, 'percentages keep the color of their block'
 # Reviewers are expanded under the report date only.
-dates = {summary.cell(r, 2).value.date(): r for r in range(7, summary.max_row + 1) if isinstance(summary.cell(r, 2).value, datetime)}
+dates = {summary.cell(r, 2).value.date(): r for r in range(8, summary.max_row + 1) if isinstance(summary.cell(r, 2).value, datetime)}
 last, earlier = dates[datetime(2026, 10, 4).date()], dates[datetime(2026, 10, 3).date()]
 assert [summary.cell(r, 2).value for r in (last + 1, last + 2)] == ['Анна', 'Борис']
 assert not any(summary.row_dimensions[r].hidden for r in (last + 1, last + 2)) and not summary.row_dimensions[last].collapsed
@@ -99,6 +99,7 @@ assert b'/FontFile2' in data and b'/ToUnicode' in data
 first, second = pages[0][1], pages[1][1]
 assert 'СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ' in first and 'Проверено за сутки' in first and '04.10.2026' in first, first[:300]
 assert 'ИТОГАМ РАБОТЫ' not in first and 'Альтернативное' not in first
+assert first.index('Всего томов с замечаниями:') < first.index('Проверено за сутки'), 'the volumes with remarks are printed above the table'
 assert 'Анна' in first and 'Борис' in first, 'reviewers of the expanded report date are printed'
 assert 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ' in second and 'Анна' in second and 'Борис' in second and 'ВСЕГО' in second, second[:300]
 assert 'Альтернативное' not in second, 'Only the first table of «Итоги работы» is on the second page'
