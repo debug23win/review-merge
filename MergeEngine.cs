@@ -22,6 +22,8 @@ namespace ReviewMerge {
     public sealed class MergedRow {
         public object[] Values;
         public string VolumeNumber;
+        // «Замечания устранены»: the last filled value in file order, so a later file updates the consolidated book.
+        public object Resolved;
         public SourceRow TargetRow;
         public readonly List<SourceRow> Reviews = new List<SourceRow>();
         public readonly List<SourceRow> TargetDuplicates = new List<SourceRow>();
@@ -42,6 +44,8 @@ namespace ReviewMerge {
         public bool CurrentDateForNewReviews, MatchSurnames;
         public bool KeepLegacyColumns;
         public bool KeepLegacyReport;
+        // Paper of the PDF made after the build.
+        public PdfPaper PdfPaper;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
         public Func<string, string, bool> SamePerson;
         // A saved answer for such a pair, if any: initials that agree merge people without a question unless the operator said "no" before.
@@ -205,6 +209,7 @@ namespace ReviewMerge {
                         merged = new MergedRow { Values = (object[])row.Values.Clone(), VolumeNumber = row.VolumeNumber, TargetRow = fi == 0 ? row : null };
                         byKey.Add(key, merged); result.Rows.Add(merged);
                     } else if (fi == 0 && merged.TargetRow != null) merged.TargetDuplicates.Add(row);
+                    if (Txt(row.Resolved) != "") merged.Resolved = row.Resolved;
                     if (!HasReview(row)) continue;
                     result.History.Add(row); merged.Reviews.Add(row);
                     bool suppliedDate=currentDateForNewReviews&&Txt(row.Values[8])!=""&&!(existingTarget&&merged.TargetRow!=null&&Txt(merged.TargetRow.Values[8])!=""&&XlsxReader.DateSerial(merged.TargetRow.Values[9]).HasValue);
@@ -352,7 +357,7 @@ namespace ReviewMerge {
                 } else {if(File.Exists(output))throw new IOException("Файл результата появился во время сборки. Повторите сборку.");File.Move(temp,output);}
                 result.Output=output;
                 if(!options.KeepLegacyReport) {
-                    try {result.Pdf=PdfReport.Write(output,asOf);progress(99,"PDF: "+Path.GetFileName(result.Pdf));}
+                    try {result.Pdf=PdfReport.Write(output,asOf,options.PdfPaper);progress(99,"PDF: "+Path.GetFileName(result.Pdf));}
                     catch(Exception ex) {result.PdfError=ex.Message;progress(99,"PDF не создан: "+ex.Message);}
                 }
                 progress(100,"Готово: "+result.Documents+" документов, "+result.Conflicts.Count+" конфликтов, "+result.Problems.Count+" проблем данных");return result;
