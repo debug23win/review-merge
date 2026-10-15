@@ -98,4 +98,4 @@ work = load_workbook(output)['Итоги работы']
 assert not any(str(x).startswith('A1:') for x in work.merged_cells.ranges) and work['A1'].alignment.horizontal == 'left'
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 assert report['PdfError'] is None and Path(report['Pdf']).exists(), report
-print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, boxes under «СВОД», formulas and unmerged title')
+print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, boxes under the summary table, formulas and unmerged title')
