@@ -276,7 +276,7 @@ def artificial_source(path, empty=False):
 def assert_remarks_row(summary, last):
     """The volumes with remarks are in row 4, right above the «СВОД» table; the table ends at the last row of the sheet."""
     text = str(summary.cell(4, 4).value)
-    assert summary.max_row == last and text.startswith('="Всего томов с замечаниями: "'), (last, summary.max_row, text)
+    assert summary.max_row == last and text.startswith('="Всего томов"&CHAR(10)&"с замечаниями: "'), (last, summary.max_row, text)
     assert summary.cell(5, 1).value == 'Этап' and summary.cell(8, 1).value == 'Этап 1'
 
 
@@ -445,7 +445,8 @@ def test_reviewer_histories_and_global_totals():
         for kind in range(2):
             formula = assert_cached(work, work_values, 6, column + kind, expected[kind])
             assert 'COUNTIFS(' in formula and '\"<=\"&' in formula, formula
-            assert work.cell(6, column + kind).font.bold
+            # Non-zero values are bold, zeros are not.
+            assert bool(work.cell(6, column + kind).font.bold) == (expected[kind] != 0), (name, kind, expected[kind])
             if name == 'ВСЕГО':
                 assert all('"' + who + '"' not in formula for who in reviewers), formula
     assert tuple(global_cumulative) == (6, 4)
