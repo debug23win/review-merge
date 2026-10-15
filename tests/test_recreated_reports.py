@@ -388,6 +388,11 @@ def test_reviewer_histories_and_global_totals():
         for offset, name in enumerate([None] + names):
             r = row + offset
             anchor = '$B%d' % row if name is None else '$B$%d' % row
+            # Only the report date is expanded: earlier and future dates stay collapsed.
+            if name is None:
+                assert bool(summary.row_dimensions[r].collapsed) == (date != AS_OF), (date, 'collapsed mark of the date row')
+            else:
+                assert bool(summary.row_dimensions[r].hidden) == (date != AS_OF), (date, name, 'expanded report date')
             if name is not None:
                 assert summary.row_dimensions[r].outlineLevel == 1
                 for column in list(range(4, 8)) + list(range(12, 16)):

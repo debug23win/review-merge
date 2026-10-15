@@ -63,6 +63,12 @@ for col in range(5, 20, 2):
     count = summary.cell(7, col - 1).font
     assert not count.i and count.sz == 12, (col - 1, count.i, count.sz, 'counts keep their font')
 assert summary.cell(7, 9).font.color.rgb == summary.cell(7, 8).font.color.rgb, 'percentages keep the color of their block'
+# Reviewers are expanded under the report date only.
+dates = {summary.cell(r, 2).value.date(): r for r in range(7, summary.max_row + 1) if isinstance(summary.cell(r, 2).value, datetime)}
+last, earlier = dates[datetime(2026, 10, 4).date()], dates[datetime(2026, 10, 3).date()]
+assert [summary.cell(r, 2).value for r in (last + 1, last + 2)] == ['Анна', 'Борис']
+assert not any(summary.row_dimensions[r].hidden for r in (last + 1, last + 2)) and not summary.row_dimensions[last].collapsed
+assert all(summary.row_dimensions[r].hidden for r in (earlier + 1, earlier + 2)) and summary.row_dimensions[earlier].collapsed
 
 pages, data = pdf_pages(pdf.read_bytes())
 assert data.startswith(b'%PDF-1.7') and data.rstrip().endswith(b'%%EOF')
@@ -72,6 +78,7 @@ assert b'/FontFile2' in data and b'/ToUnicode' in data
 first, second = pages[0][1], pages[1][1]
 assert 'СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ' in first and 'Проверено за сутки' in first and '04.10.2026' in first, first[:300]
 assert 'ИТОГАМ РАБОТЫ' not in first and 'Альтернативное' not in first
+assert 'Анна' in first and 'Борис' in first, 'reviewers of the expanded report date are printed'
 assert 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ' in second and 'Анна' in second and 'Борис' in second and 'ВСЕГО' in second, second[:300]
 assert 'Альтернативное' not in second, 'Only the first table of «Итоги работы» is on the second page'
 
@@ -79,4 +86,4 @@ assert 'Альтернативное' not in second, 'Only the first table of «
 pdf.unlink()
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04'], check=True, timeout=120)
 assert len(pdf_pages(pdf.read_bytes())[0]) == 2
-print('PDF report tests passed: two pages, summary and work totals, embedded fonts, italic percentages and brochures')
+print('PDF report tests passed: two pages, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')

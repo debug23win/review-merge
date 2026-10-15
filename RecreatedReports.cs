@@ -131,6 +131,8 @@ namespace ReviewMerge {
             for(int c=1;c<=3;c++){main.Set(4,c,new[]{"Этап","Дата / проверяющий","Время"}[c-1],header);mm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c)+"6");}
             for(int b=0;b<4;b++){int c=4+4*b;string color=new[]{gold,green,red,blue}[b];int st=RecreatedStyle(color,true);main.Set(4,c,new[]{"Всего","Проверено","Осталось проверить","Проверено за сутки"}[b],st);mm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+3)+"4");for(int j=0;j<2;j++){int p=c+2*j;main.Set(5,p,j==0?"коробов":"томов",st);mm.Add(MergeEngine.ExcelColumn(p)+"5:"+MergeEngine.ExcelColumn(p+1)+"5");main.Set(6,p,"Шт.",st);main.Set(6,p+1,"%",st);}}
             main.Heights[4]=32;main.Heights[5]=30;main.Heights[6]=26;int mr=7,di=0;
+            // Reviewers of the last date of the report are expanded; earlier and future dates stay collapsed.
+            double open=days.Where(d=>d<=asOf.ToOADate()).DefaultIfEmpty(days[days.Count-1]).Max();
             foreach(double serial in days){int summary=mr;bool gray=di++%2==1;var names=people;
                 for(int n=-1;n<names.Count;n++){int r=mr++;bool summaryRow=n<0;string who=summaryRow?"":names[n],day=summaryRow?"$B"+r:"$B$"+summary;main.Set(r,2,summaryRow?(object)serial:who,RecreatedStyle(black,summaryRow,summaryRow?df:0,gray));main.Set(r,3,17.0/24,RecreatedStyle(black,summaryRow,20,gray));
                     for(int j=0;j<2;j++){double denominator=j==0?totalBoxes:totalVolumes;string denom=j==0?tb:tv;
@@ -140,7 +142,7 @@ namespace ReviewMerge {
                             int c=12+j*2;main.Set(r,c,serial>asOf.ToOADate()?(object)"":denominator-metric(2+j,serial,day,who,false).Item1,RecreatedStyle(red,true,1,gray),"IF("+day+">"+cutoff+",\"\","+MergeEngine.ExcelColumn(4+j*2)+r+"-"+MergeEngine.ExcelColumn(8+j*2)+r+")");main.Set(r,c+1,serial>asOf.ToOADate()?(object)"":denominator>0?(denominator-metric(2+j,serial,day,who,false).Item1)/denominator*100:0,RecreatedStyle(red,true,RecreatedDecimal,gray,size:10),"IF("+day+">"+cutoff+",\"\",IFERROR("+MergeEngine.ExcelColumn(c)+r+"/("+denom+")*100,0))");
                         }else foreach(int c in new[]{4+j*2,5+j*2,12+j*2,13+j*2})main.Set(r,c,null,RecreatedStyle(black,false,0,gray));
                     }for(int b=0;b<4;b++)colorCells(main,r,4+b*4,7+b*4,new[]{gold,green,red,blue}[b]);
-                }group(main,summary+1,mr-1,"",true);if(names.Count>0)main.Templates[summary]=new XElement(N+"row",new XAttribute("r",summary),new XAttribute("collapsed",1));
+                }group(main,summary+1,mr-1,"",serial!=open);if(names.Count>0&&serial!=open)main.Templates[summary]=new XElement(N+"row",new XAttribute("r",summary),new XAttribute("collapsed",1));
             }
             // Percentages of the summary are italic, size 9; their colors, borders, fill and format stay.
             for(int r=7;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
