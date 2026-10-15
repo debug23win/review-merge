@@ -133,9 +133,11 @@ namespace ReviewMerge {
             // Every date includes every reviewer: checked is cumulative, the daily block is not.
             var main=new Grid();var mm=new List<string>();start(main,mm,"СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ",19);
             main.Set(3,1,"Проверено — накопительно по датам и проверяющим; проверено за сутки — за указанный день.",heading);mm.Add("A3:S3");
-            for(int c=1;c<=3;c++){main.Set(4,c,new[]{"Этап","Дата / проверяющий","Время"}[c-1],header);mm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c)+"6");}
-            for(int b=0;b<4;b++){int c=4+4*b;string color=new[]{gold,green,red,blue}[b];int st=RecreatedStyle(color,true);main.Set(4,c,new[]{"Всего","Проверено","Осталось проверить","Проверено за сутки"}[b],st);mm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+3)+"4");for(int j=0;j<2;j++){int p=c+2*j;main.Set(5,p,j==0?"коробов":"томов",st);mm.Add(MergeEngine.ExcelColumn(p)+"5:"+MergeEngine.ExcelColumn(p+1)+"5");main.Set(6,p,"Шт.",st);main.Set(6,p+1,"%",st);}}
-            main.Heights[4]=32;main.Heights[5]=30;main.Heights[6]=26;int mr=7,di=0;
+            // Row 4 holds the volumes with remarks; the table header takes rows 5-7, the dates start at row 8.
+            const int top=5;
+            for(int c=1;c<=3;c++){main.Set(top,c,new[]{"Этап","Дата / проверяющий","Время"}[c-1],header);mm.Add(MergeEngine.ExcelColumn(c)+top+":"+MergeEngine.ExcelColumn(c)+(top+2));}
+            for(int b=0;b<4;b++){int c=4+4*b;string color=new[]{gold,green,red,blue}[b];int st=RecreatedStyle(color,true);main.Set(top,c,new[]{"Всего","Проверено","Осталось проверить","Проверено за сутки"}[b],st);mm.Add(MergeEngine.ExcelColumn(c)+top+":"+MergeEngine.ExcelColumn(c+3)+top);for(int j=0;j<2;j++){int p=c+2*j;main.Set(top+1,p,j==0?"коробов":"томов",st);mm.Add(MergeEngine.ExcelColumn(p)+(top+1)+":"+MergeEngine.ExcelColumn(p+1)+(top+1));main.Set(top+2,p,"Шт.",st);main.Set(top+2,p+1,"%",st);}}
+            main.Heights[top]=32;main.Heights[top+1]=30;main.Heights[top+2]=26;int mr=top+3,di=0;
             // Reviewers of the last date of the report are expanded; earlier and future dates stay collapsed.
             double open=days.Where(d=>d<=asOf.ToOADate()).DefaultIfEmpty(days[days.Count-1]).Max();
             foreach(double serial in days){int summary=mr;bool gray=di++%2==1;var names=people;
@@ -150,14 +152,17 @@ namespace ReviewMerge {
                 }group(main,summary+1,mr-1,"",serial!=open);if(names.Count>0&&serial!=open)main.Templates[summary]=new XElement(N+"row",new XAttribute("r",summary),new XAttribute("collapsed",1));
             }
             // Percentages of the summary are italic, size 9; their colors, borders, fill and format stay.
-            for(int r=7;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
-            main.Set(7,1,"Этап 1",plain);if(mr>8)mm.Add("A7:A"+(mr-1));TableEdges(main,4,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},6);
-            // Volumes with remarks under the table: checked up to the report date, resolved in «Замечания устранены», still being resolved.
+            for(int r=top+3;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
+            main.Set(top+3,1,"Этап 1",plain);if(mr>top+4)mm.Add("A"+(top+3)+":A"+(mr-1));TableEdges(main,top,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},top+2);
+            // Volumes with remarks right above the table: checked up to the report date, resolved in «Замечания устранены», still being resolved.
+            // Each is framed over its block (Всего, Проверено, Осталось проверить), or plain text when the option says so.
             {double cut=asOf.ToOADate();var remarked=l.Volumes.Where(v=>v.IsVolume&&v.Issue==1&&v.Date.HasValue&&v.Date.Value>0&&v.Date.Value<=cut).ToList();int resolved=remarked.Count(v=>v.Resolved==1);
                 string all="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1)",done="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1,"+range(50,vl)+",1)";
                 var boxes=new[]{Tuple.Create(4,"Всего томов с замечаниями: ",gold,remarked.Count,all),Tuple.Create(8,"Устранено замечаний по томам: ",green,resolved,done),Tuple.Create(12,"Устраняется томов с замечаниями: ",red,remarked.Count-resolved,all+"-"+done)};
-                foreach(var b in boxes){int st=RecreatedStyle(b.Item3,true);for(int c=b.Item1;c<b.Item1+4;c++)main.Set(mr,c,null,st);main.Set(mr,b.Item1,b.Item2+b.Item4.ToString(Inv),st,Literal(b.Item2)+"&("+b.Item5+")");mm.Add(MergeEngine.ExcelColumn(b.Item1)+mr+":"+MergeEngine.ExcelColumn(b.Item1+3)+mr);}
-                main.Heights[mr]=32;mr++;}
+                int line=top-1;
+                foreach(var b in boxes){int st=RecreatedStyle(b.Item3,true);if(options.RemarksWithoutBorders)st=ReportStyle(st,"none","none","none","none");
+                    for(int c=b.Item1;c<b.Item1+4;c++)main.Set(line,c,null,st);main.Set(line,b.Item1,b.Item2+b.Item4.ToString(Inv),st,Literal(b.Item2)+"&("+b.Item5+")");mm.Add(MergeEngine.ExcelColumn(b.Item1)+line+":"+MergeEngine.ExcelColumn(b.Item1+3)+line);}
+                main.Heights[line]=32;}
             SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+(mr-1)});
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Дополнительные текстовые замечания","Всего замечаний","Томов с любыми замечаниями"};
             string[] statNames={"Файлов в реестре","Проверено файлов","Проверено томов (фрагменты и ИУЛ объединены)","Проверенных файлов с замечаниями","Проверенных томов с замечаниями","Впервые проверено файлов за сутки","Впервые проверено томов за сутки"};
