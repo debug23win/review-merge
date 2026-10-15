@@ -46,6 +46,8 @@ namespace ReviewMerge {
         public bool KeepLegacyReport;
         // PDF made after the build: paper, separate files or one file, names.
         public PdfSettings Pdf=new PdfSettings();
+        // Past days of the reports keep the numbers of the previous build; true calculates them again by the current rules.
+        public bool RecalculateHistory;
         // The volumes with remarks above «СВОД» are plain text; true frames each of them.
         public bool RemarksWithBorders;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
@@ -63,6 +65,9 @@ namespace ReviewMerge {
         // The two-page PDF of «СВОД» and «Итоги работы» next to the workbook, or why it was not made.
         public string Pdf, PdfError;
         public readonly List<string> Pdfs = new List<string>();
+        // The volume of every row (Rules.VolumeKeys) and the volume numbers that join files of different names.
+        public List<string> VolumeKeys;
+        public readonly List<string> VolumeMerges = new List<string>();
         public readonly List<Conflict> Conflicts = new List<Conflict>();
         public readonly List<Problem> Problems = new List<Problem>();
         public readonly List<SourceRow> History = new List<SourceRow>();
@@ -146,8 +151,9 @@ namespace ReviewMerge {
         static MergedRow LatestChecked(IEnumerable<MergedRow> rows) { return rows.Where(Checked).OrderByDescending(r => XlsxReader.DateSerial(r.Values[9]).Value).FirstOrDefault(); }
         // A box is normally checked as a whole: rows of a box (by their own box number or by the volume they belong to, such as ИУЛ rows) that stay unmarked while others are marked.
         static List<IncompleteBox> FindIncompleteBoxes(MergeResult result) {
-            var volumeOf = new Dictionary<MergedRow, List<MergedRow>>();
-            foreach (var g in result.Rows.GroupBy(r => Rules.VolumeKey(r.Values[2], r.Values[3]), StringComparer.Ordinal)) { var rows = g.ToList(); foreach (var r in rows) volumeOf[r] = rows; }
+            var volumeOf = new Dictionary<MergedRow, List<MergedRow>>();var keyOf = new Dictionary<MergedRow, string>();
+            for (int i = 0; i < result.Rows.Count; i++) keyOf[result.Rows[i]] = result.VolumeKeys[i];
+            foreach (var g in result.Rows.GroupBy(r => keyOf[r], StringComparer.Ordinal)) { var rows = g.ToList(); foreach (var r in rows) volumeOf[r] = rows; }
             Func<MergedRow, List<string>> own = r => Rules.BoxKeys(r.Values[10], r.Values[11]);
             Func<MergedRow, bool> partOfVolume = r => volumeOf[r].Any(v => !Rules.IsUl(v.Values[2], v.Values[3]));
             var groups = new Dictionary<string, List<MergedRow>>(StringComparer.Ordinal);var order = new List<string>();
@@ -155,7 +161,7 @@ namespace ReviewMerge {
                 var boxes = own(r);
                 if (boxes.Count == 0 && partOfVolume(r)) boxes = volumeOf[r].Select(own).FirstOrDefault(b => b.Count > 0) ?? boxes;
                 // A row of a list "45 и 46" belongs to box 45 and to box 46.
-                var keys = boxes.Count > 0 ? boxes.Select(b => Rules.BoxList(new[] { b })).ToList() : partOfVolume(r) ? new List<string> { "\u001f" + Rules.VolumeKey(r.Values[2], r.Values[3]) } : new List<string>();
+                var keys = boxes.Count > 0 ? boxes.Select(b => Rules.BoxList(new[] { b })).ToList() : partOfVolume(r) ? new List<string> { "\u001f" + keyOf[r] } : new List<string>();
                 foreach (string key in keys) {
                     List<MergedRow> list; if (!groups.TryGetValue(key, out list)) { groups[key] = list = new List<MergedRow>(); order.Add(key); }
                     list.Add(r);
@@ -305,6 +311,7 @@ namespace ReviewMerge {
                         Details = string.Join("\n",active.Select(r => SourceDescription(r,col))), Decision = decision });
                 }
             }
+            result.VolumeKeys = Rules.VolumeKeys(result.Rows, result.VolumeMerges);
             var incomplete = FindIncompleteBoxes(result);
             var selected = incomplete.Count > 0 && options.FillIncomplete != null ? options.FillIncomplete(incomplete) : null;
             foreach (var box in incomplete) {

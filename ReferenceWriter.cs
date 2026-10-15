@@ -156,7 +156,7 @@ namespace ReviewMerge {
             var keys=new List<List<string>>();
             for(int i=0;i<result.Rows.Count;i++){string raw=Rules.CleanName(result.Rows[i].Values[8]),who;if(!layout.Names.TryGetValue(raw,out who))who=raw;var boxes=Rules.BoxKeys(result.Rows[i].Values[10],result.Rows[i].Values[11]);keys.Add(boxes);layout.BoxFiles.Add(new VolumeRecord{Boxes=boxes,List=Rules.BoxList(boxes),Who=who,Date=dates[i]});}
             // Volumes: date of the last part when every part is checked, reviewer of that part, the first filled kind and boxes.
-            foreach(var g in Enumerable.Range(0,result.Rows.Count).GroupBy(i=>Rules.VolumeKey(result.Rows[i].Values[2],result.Rows[i].Values[3]),StringComparer.Ordinal)) {
+            foreach(var g in Enumerable.Range(0,result.Rows.Count).GroupBy(i=>result.VolumeKeys[i],StringComparer.Ordinal)) {
                 var indices=g.ToList();double? d=indices.All(i=>dates[i].HasValue)?(double?)indices.Max(i=>dates[i].Value):null;int chosen=d.HasValue?indices.First(i=>dates[i]==d):indices[0];
                 string raw=d.HasValue?Rules.CleanName(result.Rows[chosen].Values[8]):"",who;if(!layout.Names.TryGetValue(raw,out who))who=raw;
                 var boxes=indices.Select(i=>keys[i]).FirstOrDefault(k=>k.Count>0)??new List<string>();

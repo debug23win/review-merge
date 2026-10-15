@@ -70,8 +70,8 @@ documents = [{3: 'Том 1', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1},
 output = book(B / 'svod.xlsx', documents)
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', MAIN, str(output)], check=True, timeout=120)
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
-# Separate files by default, named «<книга> СВОД <дата>» and «<книга> Итоги работы <дата>».
-summary_pdf, work_pdf = B / 'svod СВОД 04.10.2026.pdf', B / 'svod Итоги работы 04.10.2026.pdf'
+# Separate files by default, named «<книга> СВОД <дата>» and «<книга> Итоги работы <дата>»; {дата} is yyyy.MM.dd.
+summary_pdf, work_pdf = B / 'svod СВОД 2026.10.04.pdf', B / 'svod Итоги работы 2026.10.04.pdf'
 assert report['PdfError'] is None and report['Pdfs'] == [str(summary_pdf), str(work_pdf)] and report['Pdf'] == str(summary_pdf), report
 
 cached = load_workbook(output, data_only=True)
@@ -110,7 +110,7 @@ assert 'Альтернативное' not in second, 'Only the first table of «
 summary_pdf.unlink(); work_pdf.unlink()
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04'], check=True, timeout=120)
 assert summary_pdf.exists() and work_pdf.exists()
-pdf = B / 'svod 04.10.2026.pdf'
+pdf = B / 'svod 2026.10.04.pdf'
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04', '--pdf-combined'], check=True, timeout=120)
 assert [box for box, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 595 842'] * 2
 assert_full_width(pdf, 595)
@@ -128,19 +128,19 @@ def build(*switches):
 # The build takes the paper, one file and its name from the switches.
 pdf.unlink()
 report = build('--pdf-paper=A3-landscape', '--pdf-combined', '--pdf-name=Свод {книга} на {дата}')
-one = B / 'Свод svod на 04.10.2026.pdf'
+one = B / 'Свод svod на 2026.10.04.pdf'
 assert report['Pdfs'] == [str(one)] and [b for b, _ in pdf_pages(one.read_bytes())[0]] == ['0 0 1191 842'] * 2, report
 # Names of the two files; characters Windows forbids become «_», a typed «.pdf» is not doubled.
 report = build('--pdf-name-summary=Отчёт {дата}.pdf', '--pdf-name-work=Работа: {книга}')
-assert report['Pdfs'] == [str(B / 'Отчёт 04.10.2026.pdf'), str(B / 'Работа_ svod.pdf')], report
+assert report['Pdfs'] == [str(B / 'Отчёт 2026.10.04.pdf'), str(B / 'Работа_ svod.pdf')], report
 report = build('--pdf-name-summary=Одно', '--pdf-name-work=одно')
 assert report['Pdfs'] == [] and 'одинаковое имя' in report['PdfError'] and not (B / 'Одно.pdf').exists(), report
 # A file that cannot be replaced (open in another program; here a folder of that name) gives «имя (1).pdf», then «имя (2).pdf».
 summary_pdf.unlink(); summary_pdf.mkdir()
 report = build()
-indexed = B / 'svod СВОД 04.10.2026 (1).pdf'
+indexed = B / 'svod СВОД 2026.10.04 (1).pdf'
 assert report['PdfError'] is None and report['Pdfs'] == [str(indexed), str(work_pdf)], report
 assert any('открыт в другой программе' in line and indexed.name in line for line in report['Log']), report['Log'][-3:]
-(B / 'svod СВОД 04.10.2026 (2).pdf').mkdir(); indexed.unlink(); indexed.mkdir()
-assert build()['Pdfs'][0] == str(B / 'svod СВОД 04.10.2026 (3).pdf')
+(B / 'svod СВОД 2026.10.04 (2).pdf').mkdir(); indexed.unlink(); indexed.mkdir()
+assert build()['Pdfs'][0] == str(B / 'svod СВОД 2026.10.04 (3).pdf')
 print('PDF report tests passed: separate and combined files, names, indexed busy files, four papers, full-width columns, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')
