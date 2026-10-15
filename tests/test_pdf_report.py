@@ -73,7 +73,7 @@ assert all(summary.row_dimensions[r].hidden for r in (earlier + 1, earlier + 2))
 pages, data = pdf_pages(pdf.read_bytes())
 assert data.startswith(b'%PDF-1.7') and data.rstrip().endswith(b'%%EOF')
 assert len(pages) == 2, len(pages)
-assert all(box == '0 0 842 595' for box, _ in pages), [box for box, _ in pages]
+assert all(box == '0 0 595 842' for box, _ in pages), ('A4 portrait by default', [box for box, _ in pages])
 assert b'/FontFile2' in data and b'/ToUnicode' in data
 first, second = pages[0][1], pages[1][1]
 assert 'СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ' in first and 'Проверено за сутки' in first and '04.10.2026' in first, first[:300]
@@ -82,8 +82,14 @@ assert 'Анна' in first and 'Борис' in first, 'reviewers of the expanded
 assert 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ' in second and 'Анна' in second and 'Борис' in second and 'ВСЕГО' in second, second[:300]
 assert 'Альтернативное' not in second, 'Only the first table of «Итоги работы» is on the second page'
 
-# The PDF alone can be made again from the saved workbook.
+# The PDF alone can be made again from the saved workbook, on any of the four papers.
 pdf.unlink()
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04'], check=True, timeout=120)
-assert len(pdf_pages(pdf.read_bytes())[0]) == 2
-print('PDF report tests passed: two pages, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')
+assert [box for box, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 595 842'] * 2
+for paper, box in (('A4-landscape', '0 0 842 595'), ('A3', '0 0 842 1191'), ('A3-landscape', '0 0 1191 842')):
+    subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04', paper], check=True, timeout=120)
+    assert [b for b, _ in pdf_pages(pdf.read_bytes())[0]] == [box] * 2, (paper, box)
+# The build takes the paper from --pdf-paper.
+subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', MAIN, str(output), '--pdf-paper=A3-landscape'], check=True, timeout=120)
+assert [b for b, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 1191 842'] * 2
+print('PDF report tests passed: two pages, four papers, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')

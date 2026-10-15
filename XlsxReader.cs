@@ -29,11 +29,13 @@ namespace ReviewMerge {
         public object FirstDateSource;
         public bool IsConsolidated;
         public string VolumeNumber;
+        // «Замечания устранены»: 1, a date or another mark after the notes; empty when the file has no such column.
+        public object Resolved;
         public RegisterColumns Columns;
     }
     public sealed class SourceBook {
         public string Path;
-        public int HeaderRow, DataStart;
+        public int HeaderRow, DataStart, ResolvedColumn;
         public RegisterColumns Columns;
         public readonly List<SourceRow> Rows = new List<SourceRow>();
         public readonly List<SourceRow> Orphans = new List<SourceRow>();
@@ -135,10 +137,10 @@ namespace ReviewMerge {
                 foreach (var xmlRow in data.Descendants(Ns + "sheetData").Elements(Ns + "row")) {
                     int rn;
                     if (!int.TryParse((string)xmlRow.Attribute("r"), out rn)) continue;
-                    var row = new SourceRow { Row = rn, File = path, Values = new object[28] };
+                    var row = new SourceRow { Row = rn, File = path, Values = new object[Width] };
                     foreach (var cell in xmlRow.Elements(Ns + "c")) {
                         int col = Column((string)cell.Attribute("r") ?? "");
-                        if (col < 1 || col > 28) continue;
+                        if (col < 1 || col > Width) continue;
                         string type = (string)cell.Attribute("t");
                         string raw = (string)cell.Element(Ns + "v");
                         object value = null;
@@ -162,11 +164,13 @@ namespace ReviewMerge {
                 result.Columns = new RegisterColumns { HasVolumeNumber = volumeHeader == "НОМЕРТОМА" || volumeHeader == "№ТОМА" };
                 if (Normal(header.Values[11]) != "КОРОБ" || !Normal(header.Values[result.Columns.Physical(19)-1]).Contains("ОПИСИ") || !Normal(header.Values[result.Columns.Physical(20)-1]).Contains("ПРИМЕЧАН"))
                     throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": после «Короб» допускается «Номер тома», затем шесть отметок, ошибки в описи и примечание.");
+                for (int c = result.Columns.Physical(20) + 1; c <= Width; c++) if (Rules.IsResolvedHeader(header.Values[c - 1])) { result.ResolvedColumn = c; break; }
                 foreach (var row in all) {
                     var raw = row.Values;
                     row.Columns = result.Columns;
                     row.VolumeNumber = result.Columns.HasVolumeNumber ? Text(raw[12]) : null;
                     row.FirstDateSource = raw[result.Columns.Count + 6];
+                    if (result.ResolvedColumn > 0) { row.Resolved = raw[result.ResolvedColumn - 1]; if (date1904 && row.Resolved is double && (double)row.Resolved > 1000) row.Resolved = (double)row.Resolved + 1462; }
                     row.Values = Enumerable.Range(1,20).Select(c => raw[result.Columns.Physical(c)-1]).ToArray();
                 }
                 bool knownFirstDate = Normal(header.FirstDateSource) == "ПЕРВАЯ ДАТА ИЗ ИСТОЧНИКОВ";
@@ -183,6 +187,8 @@ namespace ReviewMerge {
             }
             return result;
         }
+        // Columns read from every row: the register, the resolved-remarks column and room for user columns before it.
+        const int Width = 60;
         static XAttribute NullAttribute(this XElement element, string name) { return element == null ? null : element.Attribute(name); }
     }
 }

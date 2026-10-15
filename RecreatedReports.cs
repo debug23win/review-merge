@@ -74,6 +74,11 @@ namespace ReviewMerge {
             var a=xf.Element(N+"alignment");a.SetAttributeValue("horizontal",table||size>=16?"center":"left");a.SetAttributeValue("wrapText",table?1:0);
             id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);reportStyleCache[key]=id;return id;
         }
+        int LeftAligned(int style) {
+            string key="left|"+style;int id;if(reportStyleCache.TryGetValue(key,out id))return id;
+            var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(style));xf.Element(N+"alignment").SetAttributeValue("horizontal","left");
+            id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);reportStyleCache[key]=id;return id;
+        }
         int SummaryStylesBase,RecreatedGrayFill,RecreatedDecimal;
         void WriteRecreatedReports(MergeResult result,List<double> calendar,DateTime asOf,List<double?> dates,List<int> issues,List<int[]> typeCounts,XDocument previous) {
             var l=referenceLayout;int h=l.Helper,fl=Math.Max(7,result.Rows.Count+6),vl=Math.Max(7,l.Volumes.Count+6);
@@ -147,6 +152,12 @@ namespace ReviewMerge {
             // Percentages of the summary are italic, size 9; their colors, borders, fill and format stay.
             for(int r=7;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
             main.Set(7,1,"Этап 1",plain);if(mr>8)mm.Add("A7:A"+(mr-1));TableEdges(main,4,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},6);
+            // Volumes with remarks under the table: checked up to the report date, resolved in «Замечания устранены», still being resolved.
+            {double cut=asOf.ToOADate();var remarked=l.Volumes.Where(v=>v.IsVolume&&v.Issue==1&&v.Date.HasValue&&v.Date.Value>0&&v.Date.Value<=cut).ToList();int resolved=remarked.Count(v=>v.Resolved==1);
+                string all="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1)",done="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1,"+range(50,vl)+",1)";
+                var boxes=new[]{Tuple.Create(4,"Всего томов с замечаниями: ",gold,remarked.Count,all),Tuple.Create(8,"Устранено замечаний по томам: ",green,resolved,done),Tuple.Create(12,"Устраняется томов с замечаниями: ",red,remarked.Count-resolved,all+"-"+done)};
+                foreach(var b in boxes){int st=RecreatedStyle(b.Item3,true);for(int c=b.Item1;c<b.Item1+4;c++)main.Set(mr,c,null,st);main.Set(mr,b.Item1,b.Item2+b.Item4.ToString(Inv),st,Literal(b.Item2)+"&("+b.Item5+")");mm.Add(MergeEngine.ExcelColumn(b.Item1)+mr+":"+MergeEngine.ExcelColumn(b.Item1+3)+mr);}
+                main.Heights[mr]=32;mr++;}
             SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+(mr-1)});
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Дополнительные текстовые замечания","Всего замечаний","Томов с любыми замечаниями"};
             string[] statNames={"Файлов в реестре","Проверено файлов","Проверено томов (фрагменты и ИУЛ объединены)","Проверенных файлов с замечаниями","Проверенных томов с замечаниями","Впервые проверено файлов за сутки","Впервые проверено томов за сутки"};
@@ -170,7 +181,9 @@ namespace ReviewMerge {
                 SaveReport(tab,g,width,new[]{Col(1,1,10),Col(2,2,28)}.Concat(Enumerable.Range(3,width-2).Select(c=>Col(c,c,c%2==0?7:14))),merges,areas.ToArray());
             }
             // Reviewer matrix and its alternative grouped representation.
-            var work=new Grid();var wm=new List<string>();int ww=4+people.Count*2;start(work,wm,"СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ",ww);work.Set(4,1,"Этап",header);work.Set(4,2,"Дата",header);wm.Add("A4:A5");wm.Add("B4:B5");work.Set(6,1,"Этап 1",plain);work.Set(6,2,"Всего",header);
+            var work=new Grid();var wm=new List<string>();int ww=4+people.Count*2;start(work,wm,"СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ",ww);
+            // The title of the work totals is not merged: it starts in A1 and runs over the empty cells to the right.
+            wm.Remove("A1:"+MergeEngine.ExcelColumn(ww)+"1");work.Rows[1][1].SetAttributeValue("s",LeftAligned(title));work.Set(4,1,"Этап",header);work.Set(4,2,"Дата",header);wm.Add("A4:A5");wm.Add("B4:B5");work.Set(6,1,"Этап 1",plain);work.Set(6,2,"Всего",header);
             // The final pair counts unique boxes/volumes directly, just like the dated summary.
             // It must not add box and volume units together or duplicate a shared box.
             var workPeople=people.Concat(new[]{""}).ToList();

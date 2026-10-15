@@ -80,6 +80,11 @@ namespace ReviewMerge {
             if (result.Count == 0 || result.Count > MaxBoxesInCell) { valid = false; return new List<int>(); }
             return result;
         }
+        // «Замечания устранены»: 1, a date or any other mark; empty, 0 and «нет» are not a mark. The Справка formula mirrors this.
+        public static bool IsResolved(object value) { string s = Text(value); return s != "" && s != "0" && XlsxReader.Normal(value) != "НЕТ"; }
+        public const string ResolvedHeader = "Замечания устранены";
+        // "Замечания устранены", "Замечание устранено" or "Устранено"; "Срок устранения" is another column.
+        public static bool IsResolvedHeader(object header) { return Regex.IsMatch(XlsxReader.Normal(header), @"^(?:ЗАМЕЧАНИ[ЕЯ] )?УСТРАНЕН[ОЫ]?(?![\p{L}\p{N}])"); }
         public static string Kind(object kind) { string k = Text(kind).Trim().ToUpperInvariant(); return k == "" ? "Не указан" : k; }
         public static List<string> BoxKeys(object kind, object box) {
             bool valid; string k = Kind(kind);

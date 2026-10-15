@@ -25,6 +25,8 @@ namespace ReviewMerge {
         readonly Dictionary<int,int> mainDateStyles=new Dictionary<int,int>();
         readonly Dictionary<int,int> mainTextStyles=new Dictionary<int,int>();
         RegisterColumns mainColumns;
+        // Column of «Замечания устранены» on the main sheet.
+        int resolvedColumn;
         int MainTextStyle(int original) {
             int id;if(mainTextStyles.TryGetValue(original,out id))return id;
             var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(original));
@@ -146,6 +148,7 @@ namespace ReviewMerge {
             bool ourHelpers=Enumerable.Range(0,7).All(i=>Text(Value(At(main,result.HeaderRow,mainColumns.Count+1+i)))==legacyHeaders[i]);
             if(ourHelpers) RemoveLegacyHelpers(main,mainColumns.Count+1);
             if(mainColumns.HasVolumeNumber) FormatVolumeColumn(main,first);
+            resolvedColumn=ResolvedColumn(main,result.HeaderRow,first);
             var sourceStyles=new Dictionary<int,int>();
             var sample=data.Elements(N+"row").FirstOrDefault(e=>(int)e.Attribute("r")==first);
             if(sample!=null)foreach(var c in sample.Elements(N+"c")){int col=Column((string)c.Attribute("r"));sourceStyles[col]=(int?)c.Attribute("s")??0;}
@@ -165,7 +168,7 @@ namespace ReviewMerge {
             int maxCol=Math.Max(mainColumns.Count,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(mainColumns.Count).Max());
             var dimension=main.Root.Element(N+"dimension");if(dimension==null){dimension=new XElement(N+"dimension");var sheetPr=main.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else main.Root.AddFirst(dimension);}dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(maxCol)+last);
             var filter=main.Root.Element(N+"autoFilter");
-            if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(mainColumns.Count,Column(right)))+last);}
+            if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(Math.Max(mainColumns.Count,resolvedColumn),Column(right)))+last);}
             Store(mainPath,main);progress(65,"Данные проверки объединены. Статистика рассчитывается на листе «Свод»");
             RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags);
             if(!options.KeepLegacyReport)progress(82,"Пересозданы 4 отчётных листа: СВОД, Стат. по типам, Стат. по зам., Итоги работы.");
@@ -185,6 +188,15 @@ namespace ReviewMerge {
                 object value=row.Values[logical-1];if(logical==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous[logical-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
                 SetCell(xmlrow,Cell(rn,col,value,style));
             }
+            if(resolvedColumn>0) {
+                // «Замечания устранены»: 1 stays a number, a date gets the date format; an unchanged cell keeps its formatting.
+                var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==resolvedColumn);object value=row.Resolved;
+                if(!(keep&&source!=null&&Text(source.Resolved)==Text(value))&&!(value==null&&old==null)) {
+                    int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(resolvedColumn)?sourceStyles[resolvedColumn]:bodyStyle;double? serial=XlsxReader.DateSerial(value);
+                    if(serial.HasValue){value=serial.Value;style=MainDateStyle(style);}else{double n;if(value is string&&double.TryParse((string)value,NumberStyles.Float,Inv,out n))value=n;}
+                    SetCell(xmlrow,Cell(rn,resolvedColumn,value,style));
+                }
+            }
             if(mainColumns.HasVolumeNumber) {
                 var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==13);
                 int style=MainTextStyle(old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(13)?sourceStyles[13]:bodyStyle);
@@ -193,6 +205,25 @@ namespace ReviewMerge {
             }
             /* Calculation cells belong on the reference sheet, outside the main register. */
             var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
+        }
+        // «Замечания устранены» is found by its header after the notes; a missing column is added after the last filled header,
+        // so user columns stay where they are. The numbering row and the hint row above the header get its cells too.
+        // The legacy layout (--keep-legacy-columns) gets no new column: 0 means there is none.
+        int ResolvedColumn(XDocument main,int header,int first) {
+            var rows=main.Root.Element(N+"sheetData").Elements(N+"row").ToDictionary(r=>(int)r.Attribute("r"));int notes=mainColumns.Physical(20);
+            XElement head;if(!rows.TryGetValue(header,out head))return 0;
+            foreach(var c in head.Elements(N+"c")){int col=Column((string)c.Attribute("r"));if(col>notes&&Rules.IsResolvedHeader(Value(c)))return col;}
+            if(options.KeepLegacyColumns)return 0;
+            int column=notes+1;
+            foreach(var row in rows.Where(r=>r.Key<first).Select(r=>r.Value))foreach(var c in row.Elements(N+"c"))if(Text(Value(c))!="")column=Math.Max(column,Column((string)c.Attribute("r"))+1);
+            SetCell(head,Cell(header,column,Rules.ResolvedHeader,StyleAt(main,header,notes,headStyle)));
+            XElement numbers=null,hint=null,found;
+            if(first==header+2&&rows.TryGetValue(header+1,out found)&&Text(Value(At(main,header+1,1)))=="1"){numbers=found;SetCell(numbers,Cell(header+1,column,column,StyleAt(main,header+1,notes,bodyStyle)));}
+            if(rows.TryGetValue(header-2,out found)&&Text(Value(At(main,header-2,notes)))!=""){hint=found;SetCell(hint,Cell(header-2,column,"указать «1» или дату устранения замечаний",StyleAt(main,header-2,notes,bodyStyle)));}
+            foreach(var row in new[]{head,numbers,hint}.Where(r=>r!=null)){var cells=row.Elements(N+"c").OrderBy(c=>Column((string)c.Attribute("r"))).ToList();cells.Remove();row.Add(cells);}
+            var cols=main.Root.Element(N+"cols");if(cols==null){cols=new XElement(N+"cols");main.Root.Element(N+"sheetData").AddBeforeSelf(cols);}
+            if(!cols.Elements(N+"col").Any(c=>(int)c.Attribute("min")<=column&&(int)c.Attribute("max")>=column)){cols.Add(Col(column,column,16));var sorted=cols.Elements().OrderBy(c=>(int)c.Attribute("min")).ToList();sorted.Remove();cols.Add(sorted);}
+            return column;
         }
         void FormatVolumeColumn(XDocument main,int first) {
             var cols=main.Root.Element(N+"cols");

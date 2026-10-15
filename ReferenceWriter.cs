@@ -8,8 +8,8 @@ using System.Xml.Linq;
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
         const string CalculationMarker="ReviewMerge.FirstDates.v3";
-        const int HelperWidth=49,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
-        sealed class VolumeRecord {public string List="",Who,Raw="",Kind="";public List<string> Boxes=new List<string>();public double? Date;public int Issue;public bool IsVolume=true;}
+        const int HelperWidth=51,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
+        sealed class VolumeRecord {public string List="",Who,Raw="",Kind="";public List<string> Boxes=new List<string>();public double? Date;public int Issue,Resolved;public bool IsVolume=true;}
         // One day of the reference sheet: box slots, the "boxes / volumes" total and the note column. A spare day gets a date when a new date appears in the main sheet.
         sealed class DayBlock {public double? Date;public int Start,Slots;public int Total{get{return Start+Slots;}}public int Note{get{return Start+Slots+1;}}}
         sealed class Person {public string Name;public int Row;public bool FromSheet,Used;}

@@ -9,17 +9,35 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace ReviewMerge {
+    // Paper of the PDF; A4 portrait is the default.
+    public enum PdfPaper { A4Portrait, A4Landscape, A3Portrait, A3Landscape }
+    public static class PdfPapers {
+        public static readonly string[] Names={"А4, книжная","А4, альбомная","А3, книжная","А3, альбомная"};
+        // Keys of the settings file and of the --pdf-paper switch.
+        public static readonly string[] Keys={"A4","A4-landscape","A3","A3-landscape"};
+        public static PdfPaper Parse(string key) {
+            for(int i=0;i<Keys.Length;i++)if(string.Equals(key,Keys[i],StringComparison.OrdinalIgnoreCase)||string.Equals(key,Names[i],StringComparison.OrdinalIgnoreCase))return (PdfPaper)i;
+            throw new ArgumentException("Неизвестный формат PDF «"+key+"». Допустимо: "+string.Join(", ",Keys)+".");
+        }
+        public static string Key(PdfPaper paper){return Keys[(int)paper];}
+        // Width and height in points.
+        public static double[] Size(PdfPaper paper) {
+            bool a3=paper==PdfPaper.A3Portrait||paper==PdfPaper.A3Landscape,landscape=paper==PdfPaper.A4Landscape||paper==PdfPaper.A3Landscape;
+            double shorter=a3?842:595,longer=a3?1191:842;return landscape?new[]{longer,shorter}:new[]{shorter,longer};
+        }
+    }
+
     // A two-page PDF of the finished workbook: the «СВОД» table on the first page and the first table of
-    // «Итоги работы» on the second, each scaled so that all its columns fit one landscape page.
+    // «Итоги работы» on the second, each scaled so that all its columns fit one page of the chosen paper.
     // The tables are drawn from the saved cells (values, number formats, fonts, fills, borders, merges),
     // so the PDF shows what Excel shows. Excel and a printer are not needed.
     public static class PdfReport {
         public static string PathFor(string workbook,DateTime asOf) {
             return Path.Combine(Path.GetDirectoryName(workbook),Path.GetFileNameWithoutExtension(workbook)+" "+asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture)+".pdf");
         }
-        public static string Write(string workbook,DateTime asOf) {
-            var book=new PdfWorkbook(workbook);var pdf=new PdfDocument("Свод проверки "+asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture));
-            book.Render(pdf,"СВОД",0);book.Render(pdf,"Итоги работы",0);
+        public static string Write(string workbook,DateTime asOf,PdfPaper paper=PdfPaper.A4Portrait) {
+            var book=new PdfWorkbook(workbook);var pdf=new PdfDocument("Свод проверки "+asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture));var size=PdfPapers.Size(paper);
+            book.Render(pdf,"СВОД",0,size[0],size[1]);book.Render(pdf,"Итоги работы",0,size[0],size[1]);
             string path=PathFor(workbook,asOf),temp=path+".tmp";
             File.WriteAllBytes(temp,pdf.Save());
             try {if(File.Exists(path))File.Delete(path);File.Move(temp,path);}
@@ -92,7 +110,7 @@ namespace ReviewMerge {
             if(type=="b")return raw=="1";
             double d;return double.TryParse(raw,NumberStyles.Float,Inv,out d)?(object)d:raw;
         }
-        public void Render(PdfDocument pdf,string sheetName,int area) {
+        public void Render(PdfDocument pdf,string sheetName,int area,double pw,double ph) {
             int index=sheets.FindIndex(s=>string.Equals(s.Item1,sheetName,StringComparison.OrdinalIgnoreCase));
             if(index<0)throw new InvalidDataException("в книге нет листа «"+sheetName+"».");
             var doc=Load(sheets[index].Item2);var root=doc.Root;
@@ -127,9 +145,8 @@ namespace ReviewMerge {
             if(merges!=null)foreach(var mc in merges.Elements(N+"mergeCell")){var p=Regex.Match((string)mc.Attribute("ref")??"",@"^([A-Z]+)(\d+):([A-Z]+)(\d+)$");if(!p.Success)continue;
                 int[] rect={Column(p.Groups[1].Value),int.Parse(p.Groups[2].Value,Inv),Column(p.Groups[3].Value),int.Parse(p.Groups[4].Value,Inv)};merged[(long)rect[1]<<16|(uint)rect[0]]=rect;
                 for(int r=rect[1];r<=rect[3];r++)for(int c=rect[0];c<=rect[2];c++)mergedCells[(long)r<<16|(uint)c]=rect;}
-            // The page: A4 from the sheet's page setup, margins in inches; the table is scaled down to fit both ways.
-            var setup=root.Element(N+"pageSetup");bool landscape=setup==null||(string)setup.Attribute("orientation")!="portrait";
-            double pw=landscape?842:595,ph=landscape?595:842,ml=18,mr=18,mt=25.2,mb=25.2;var margins=root.Element(N+"pageMargins");
+            // The page of the chosen paper, margins of the sheet in inches; the table is scaled down to fit both ways.
+            double ml=18,mr=18,mt=25.2,mb=25.2;var margins=root.Element(N+"pageMargins");
             if(margins!=null){Func<string,double,double> inch=(name,fallback)=>{double v;return double.TryParse((string)margins.Attribute(name),NumberStyles.Float,Inv,out v)?v*72:fallback;};ml=inch("left",ml);mr=inch("right",mr);mt=inch("top",mt);mb=inch("bottom",mb);}
             double scale=Math.Min(1,Math.Min((pw-ml-mr)/Math.Max(1,width),(ph-mt-mb)/Math.Max(1,height)));
             var page=pdf.AddPage(pw,ph);

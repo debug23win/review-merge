@@ -16,16 +16,18 @@ namespace ReviewMerge {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             try {
                 if(args.Length>0&&args[0]=="--apply-update")return DesktopUpdates.Updates.Apply(args);
-                // --pdf книга.xlsx yyyy-MM-dd: the two-page PDF of an existing workbook, without a build.
-                if(args.Length==3&&args[0]=="--pdf"){Console.WriteLine(PdfReport.Write(Path.GetFullPath(args[1]),DateTime.ParseExact(args[2],"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture)));return 0;}
+                // --pdf книга.xlsx yyyy-MM-dd [A4|A4-landscape|A3|A3-landscape]: the two-page PDF of an existing workbook, without a build.
+                if((args.Length==3||args.Length==4)&&args[0]=="--pdf"){Console.WriteLine(PdfReport.Write(Path.GetFullPath(args[1]),DateTime.ParseExact(args[2],"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture),args.Length==4?PdfPapers.Parse(args[3]):PdfPaper.A4Portrait));return 0;}
                 if (args.Length > 0 && args[0] == "--batch") {
                     // Options of the batch mode answer every question with "yes": --match-surnames merges people with one surname, --fill-incomplete fills the remaining rows of partly checked boxes.
                     string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns","--keep-legacy-report"};
                     var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1]),KeepLegacyColumns=args.Contains(switches[4]),KeepLegacyReport=args.Contains(switches[5])};
                     if(args.Contains(switches[2]))options.FillIncomplete=list=>list;
                     if(args.Contains(switches[3]))options.ConvertMark=(mark,count)=>true;
-                    args=args.Where(a=>!switches.Contains(a)).ToArray();
-                    if (args.Length < 5) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--current-date-for-new] [--match-surnames] [--fill-incomplete] [--convert-marks]");
+                    // --pdf-paper=A3-landscape: paper of the PDF, A4 portrait by default.
+                    string paper=args.FirstOrDefault(a=>a.StartsWith("--pdf-paper=",StringComparison.Ordinal));if(paper!=null)options.PdfPaper=PdfPapers.Parse(paper.Substring(12));
+                    args=args.Where(a=>!switches.Contains(a)&&a!=paper).ToArray();
+                    if (args.Length < 5) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--current-date-for-new] [--match-surnames] [--fill-incomplete] [--convert-marks] [--pdf-paper=A4|A4-landscape|A3|A3-landscape]");
                     DateTime date = DateTime.ParseExact(args[2], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
                     var logs = new List<string>();
                     var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
@@ -55,6 +57,7 @@ namespace ReviewMerge {
         readonly ListView files = new ListView();
         readonly TextBox output = new TextBox(), sheetName = new TextBox();
         readonly DateTimePicker asOf = new DateTimePicker();
+        readonly ComboBox paper = new ComboBox();
         readonly CheckBox currentDate = new CheckBox(), matchSurnames = new CheckBox();
         readonly LinkLabel forgetNames = new LinkLabel();
         readonly RichTextBox log = new RichTextBox();
@@ -91,11 +94,15 @@ namespace ReviewMerge {
             buttons.Controls.Add(EditButton("Ниже",74,(s,e)=>MoveSelected(1)));content.Controls.Add(buttons,0,0);
             files.Dock=DockStyle.Fill;files.View=View.Details;files.FullRowSelect=true;files.MultiSelect=true;files.HideSelection=false;
             files.Columns.Add("№",38);files.Columns.Add("Файл",265);files.Columns.Add("Папка",630);content.Controls.Add(files,0,1);
-            var parameters=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=4};parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,125));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));
+            var parameters=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=6};parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,125));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));
             parameters.Controls.Add(new Label {Text="Основной лист:",AutoSize=true,Anchor=AnchorStyles.Left},0,0);
             sheetName.Text="Все загруженные файлы";sheetName.Dock=DockStyle.Fill;parameters.Controls.Add(sheetName,1,0);
             parameters.Controls.Add(new Label {Text="Дата свода:",AutoSize=true,Anchor=AnchorStyles.Left},2,0);
-            asOf.Format=DateTimePickerFormat.Custom;asOf.CustomFormat="dd.MM.yyyy";asOf.Dock=DockStyle.Fill;parameters.Controls.Add(asOf,3,0);content.Controls.Add(parameters,0,2);
+            asOf.Format=DateTimePickerFormat.Custom;asOf.CustomFormat="dd.MM.yyyy";asOf.Dock=DockStyle.Fill;parameters.Controls.Add(asOf,3,0);
+            // Paper of the PDF made after the build; the choice is kept between runs.
+            parameters.Controls.Add(new Label {Text="Формат PDF:",AutoSize=true,Anchor=AnchorStyles.Left,Margin=new Padding(10,3,0,3)},4,0);
+            paper.DropDownStyle=ComboBoxStyle.DropDownList;paper.Dock=DockStyle.Fill;paper.Items.AddRange(PdfPapers.Names);paper.SelectedIndex=(int)SavedPaper();
+            paper.SelectedIndexChanged+=(s,e)=>{try{UserSettings.SetText("PdfPaper",PdfPapers.Key((PdfPaper)paper.SelectedIndex));}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}};parameters.Controls.Add(paper,5,0);content.Controls.Add(parameters,0,2);
             var settings=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=2,Margin=new Padding(0)};settings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             currentDate.Text="Ставить текущую дату новым проверенным томам";currentDate.AutoSize=true;currentDate.Anchor=AnchorStyles.Left;currentDate.Checked=UserSettings.GetFlag("CurrentDateForNewReviews",false);currentDate.CheckedChanged+=(s,e)=>{SaveFlag("CurrentDateForNewReviews",currentDate.Checked);UpdateRule();};settings.Controls.Add(currentDate,0,0);
             matchSurnames.Text="Сопоставлять проверяющих по фамилии (при совпадении инициалов — сразу, иначе спрашивать)";matchSurnames.AutoSize=true;matchSurnames.Anchor=AnchorStyles.Left;matchSurnames.Checked=UserSettings.GetFlag("MatchSurnames",true);matchSurnames.CheckedChanged+=(s,e)=>SaveFlag("MatchSurnames",matchSurnames.Checked);settings.Controls.Add(matchSurnames,0,1);
@@ -149,7 +156,7 @@ namespace ReviewMerge {
         void Ui(Action action) {if(!IsDisposed && IsHandleCreated)BeginInvoke(action);}
         void Busy(bool value) {
             running=value;build.Enabled=!value;cancel.Enabled=value;open.Enabled=!value && lastOutput!=null;
-            foreach(var b in editingButtons)b.Enabled=!value;sheetName.Enabled=!value;output.Enabled=!value;asOf.Enabled=!value;files.Enabled=!value;currentDate.Enabled=!value;matchSurnames.Enabled=!value;forgetNames.Enabled=!value;
+            foreach(var b in editingButtons)b.Enabled=!value;sheetName.Enabled=!value;output.Enabled=!value;asOf.Enabled=!value;paper.Enabled=!value;files.Enabled=!value;currentDate.Enabled=!value;matchSurnames.Enabled=!value;forgetNames.Enabled=!value;
         }
         void StartBuild() {
             if(paths.Count==0) {MessageBox.Show(this,"Добавьте файлы проверяющих.",Text,MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
@@ -158,7 +165,7 @@ namespace ReviewMerge {
             try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
             var selected=paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
-            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark};
+            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark,PdfPaper=(PdfPaper)paper.SelectedIndex};
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append("Начата сборка "+selected.Count+" файлов.");
             var worker=new Thread(()=> {
                 try {
@@ -171,6 +178,7 @@ namespace ReviewMerge {
                 catch(Exception ex) {Ui(()=>{Append("Ошибка: "+ex.Message);Busy(false);cancellation.Dispose();cancellation=null;MessageBox.Show(this,ex.Message,"Не удалось собрать свод",MessageBoxButtons.OK,MessageBoxIcon.Error);});}
             });worker.SetApartmentState(ApartmentState.STA);worker.IsBackground=true;worker.Start();
         }
+        static PdfPaper SavedPaper(){try{string key=UserSettings.GetText("PdfPaper");return key==null?PdfPaper.A4Portrait:PdfPapers.Parse(key);}catch(ArgumentException){return PdfPaper.A4Portrait;}}
         void SaveFlag(string name,bool value){try{UserSettings.SetFlag(name,value);}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}}
         void RefreshForget(){int n=UserSettings.AnswerCount();forgetNames.Text=n==0?"":"Забыть сохранённые ответы ("+n+")";forgetNames.Visible=n>0;}
         // Called from the build thread: asks on the window thread and remembers the answer for the next evenings.
@@ -228,6 +236,8 @@ namespace ReviewMerge {
         static void Save(Dictionary<string,object> values){Directory.CreateDirectory(Path.GetDirectoryName(PathName));File.WriteAllText(PathName,new JavaScriptSerializer().Serialize(values),new UTF8Encoding(false));}
         public static bool GetFlag(string name,bool fallback){object value;return Load().TryGetValue(name,out value)&&value is bool?(bool)value:fallback;}
         public static void SetFlag(string name,bool value){var values=Load();values[name]=value;Save(values);}
+        public static string GetText(string name){object value;return Load().TryGetValue(name,out value)?value as string:null;}
+        public static void SetText(string name,string value){var values=Load();values[name]=value;Save(values);}
         static Dictionary<string,object> Answers(Dictionary<string,object> values,string section){object map;return values.TryGetValue(section,out map)?map as Dictionary<string,object>??new Dictionary<string,object>():new Dictionary<string,object>();}
         public static string PairKey(string raw,string known){return Rules.NameKey(raw)+" = "+Rules.NameKey(known);}
         public static bool? GetAnswer(string section,string key){object value;return Answers(Load(),section).TryGetValue(key,out value)&&value is bool?(bool?)(bool)value:null;}

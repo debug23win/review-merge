@@ -270,6 +270,12 @@ def artificial_source(path, empty=False):
     return dates
 
 
+def assert_remarks_row(summary, row):
+    """The volumes with remarks are in the row right under the «СВОД» table, the last row of the sheet."""
+    text = str(summary.cell(row, 4).value)
+    assert summary.max_row == row and text.startswith('="Всего томов с замечаниями: "'), (row, summary.max_row, text)
+
+
 def assert_matrix_layout(path, sheet, reviewers, dates, maximum_digit_width=10):
     """Two columns per reviewer plus a real, final two-column ВСЕГО group."""
     end = 4 + 2 * len(reviewers)
@@ -284,7 +290,9 @@ def assert_matrix_layout(path, sheet, reviewers, dates, maximum_digit_width=10):
     assert normal.name == 'Courier New' and normal.sz == 12, normal
     assert sheet['C5'].font.name == 'Times New Roman', sheet['C5'].font
     merges = set(map(str, sheet.merged_cells.ranges))
-    assert 'A1:' + letter(end) + '1' in merges
+    # The title is not merged: it starts in A1, left aligned, and runs over the empty cells to the right.
+    assert not any(m.startswith('A1:') for m in merges), merges
+    assert sheet['A1'].value == 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ' and sheet['A1'].alignment.horizontal == 'left'
     assert 'A4:A5' in merges and 'B4:B5' in merges
     for column in range(3, end + 1, 2):
         assert '%s4:%s4' % (letter(column), letter(column + 1)) in merges
@@ -367,9 +375,9 @@ def test_reviewer_histories_and_global_totals():
     global_daily = {1: (2, 1), 2: (3, 2), 3: (1, 1), 4: (0, 0)}
     cumulative = {name: [0, 0] for name in reviewers}
     global_cumulative = [0, 0]
-    assert summary.max_row == 6 + len(dates) * (len(reviewers) + 1)
+    assert_remarks_row(summary, 7 + len(dates) * (len(reviewers) + 1))
     assert summary.max_column == 19
-    assert sheet_xml(target, 'СВОД').find('s:dimension', NS).get('ref') == 'A1:S26'
+    assert sheet_xml(target, 'СВОД').find('s:dimension', NS).get('ref') == 'A1:S27'
     seen = []
     for index, date in enumerate(dates):
         row = 7 + index * (len(reviewers) + 1)
@@ -465,7 +473,8 @@ def test_no_reviewers():
         for column in (3, 4):
             assert_cached(book['Итоги работы'], cached['Итоги работы'], row, column, 0)
     summary = book['СВОД']
-    assert summary.max_row == 7 and summary.max_column == 19
+    assert_remarks_row(summary, 8)
+    assert summary.max_column == 19
     assert summary['B7'].value == AS_OF
     assert not summary.row_dimensions[7].outlineLevel
     assert not any(d.outlineLevel for d in summary.row_dimensions.values())
@@ -534,7 +543,7 @@ def test_lifetime_reviewers_do_not_depend_on_as_of():
         headers = assert_matrix_layout(target, book['Итоги работы'], reviewers, expected_dates)
         assert_report_reviewers(book, reviewers, EXCLUDED_REVIEWERS)
         summary = book['СВОД']
-        assert summary.max_row == 6 + len(expected_dates) * (len(reviewers) + 1)
+        assert_remarks_row(summary, 7 + len(expected_dates) * (len(reviewers) + 1))
         for index, date in enumerate(expected_dates):
             start = 7 + index * (len(reviewers) + 1)
             assert summary.cell(start, 2).value == date
@@ -584,8 +593,8 @@ def test_only_unqualified_reviewers():
     assert_cached(book['Итоги работы'], cached['Итоги работы'], 6, 3, 2)
     assert_cached(book['Итоги работы'], cached['Итоги работы'], 6, 4, 0)
     summary = book['СВОД']
-    assert summary.max_row == 6 + len(dates)
-    assert [summary.cell(row, 2).value for row in range(7, summary.max_row + 1)] == dates
+    assert_remarks_row(summary, 7 + len(dates))
+    assert [summary.cell(row, 2).value for row in range(7, summary.max_row)] == dates
     assert not any(dim.outlineLevel for dim in summary.row_dimensions.values())
     as_of_row = 7 + dates.index(AS_OF)
     assert_cached(summary, cached['СВОД'], as_of_row, 8, 2)

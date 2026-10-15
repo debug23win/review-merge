@@ -125,7 +125,7 @@ namespace ReviewMerge {
             if(!reference) {g.Set(1,1,"СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ",defaults[8]);g.Heights[1]=30;g.Set(4,1,"Кол-во дней проверки:",defaults[8]);g.Set(5,1,"По состоянию на:",defaults[8]);}
             g.Set(1,h,CalculationMarker,bodyStyle);g.Set(1,h+1,asOf.ToOADate(),dateStyle);
             string[] helperNames={"Ключ короба","Проверяющий для статистики","Считается томом","Файл проверен","Дата для статистики","Есть замечания","Запись дня тома","Новый проверяющий","Вид документации","Проверяющий","Строка основного листа","Имя файла"};
-            for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);g.Set(6,h+25,"Новый короб",bodyStyle);g.Set(6,h+30,"Номер короба без слов",bodyStyle);g.Set(6,h+48,"Начало ключа короба",bodyStyle);
+            for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);g.Set(6,h+49,"Замечание не устранено",bodyStyle);g.Set(6,h+50,"Замечания тома устранены",bodyStyle);g.Set(6,h+25,"Новый короб",bodyStyle);g.Set(6,h+30,"Номер короба без слов",bodyStyle);g.Set(6,h+48,"Начало ключа короба",bodyStyle);
             // Box numbers 1-1000 in one cell: a range "45-48" is cut out of it.
             string numbers="$"+MergeEngine.ExcelColumn(h+30)+"$2";g.Set(2,h+30,";"+string.Join(";",Enumerable.Range(1,1000))+";",bodyStyle);
             string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h),rawNames=LocalRange(h+9,7,last),boxLists=LocalRange(h,7,last);
@@ -142,6 +142,9 @@ namespace ReviewMerge {
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),INT("+date+"),\"\")");
                 string marks=MainCell(name,mainColumns.Letter(13),mr)+":"+mainColumns.Letter(18)+mr;
                 g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+marks+",1)>0,COUNTIF("+marks+",\"?*\")>0,"+MainCell(name,mainColumns.Letter(19),mr)+"<>\"\","+MainCell(name,mainColumns.Letter(20),mr)+"<>\"\"),1,0)");
+                // A remark without a mark in «Замечания устранены» (empty, 0 or «нет») keeps its volume open; mirrors Rules.IsResolved.
+                string resolvedCell="TRIM("+(resolvedColumn>0?MainCell(name,MergeEngine.ExcelColumn(resolvedColumn),mr):"\"\"")+")";
+                g.Set(rn,h+49,issues[i]==1&&!(resolvedColumn>0&&Rules.IsResolved(row.Resolved))?1:0,intStyle,"IF("+MergeEngine.ExcelColumn(h+5)+rn+"=0,0,IF(OR("+resolvedCell+"=\"\","+resolvedCell+"=\"0\",UPPER("+resolvedCell+")=\"НЕТ\"),1,0))");
                 // Reviewers and boxes typed in the main sheet after the build: the first row of each that the reference sheet does not list yet.
                 string boxRef=MergeEngine.ExcelColumn(h)+rn;
                 g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+rawRef+")>0,0,IF(MATCH("+rawRef+","+rawNames+",0)="+(i+1)+",1,0)))");
@@ -163,6 +166,10 @@ namespace ReviewMerge {
                 volumeDates.Add(d);volumeIssues.Add(issue);counted.Add(isVolume);var counts=new int[8];typeCounts.Add(counts);
                 string dateCells=GroupCells(h+4,indices),issueCells=GroupCells(h+5,indices);
                 g.Set(rn,vh,volumeKeys[indices[0]],bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF(COUNT("+dateCells+")="+indices.Count+",MAX("+dateCells+"),\"\")");g.Set(rn,vh+2,issue,intStyle,"MAX("+issueCells+")");g.Set(rn,h+2,isVolume?1:0,intStyle);
+                // Remarks of the volume are resolved when every part with remarks is marked in «Замечания устранены».
+                record.Resolved=issue==1&&indices.All(i=>issues[i]==0||resolvedColumn>0&&Rules.IsResolved(result.Rows[i].Resolved))?1:0;
+                string open="MAX("+GroupCells(h+49,indices)+")";if(open.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumeKeys[indices[0]]);
+                g.Set(rn,h+50,record.Resolved,intStyle,"IF(AND("+MergeEngine.ExcelColumn(vh+2)+rn+"=1,"+open+"=0),1,0)");
                 // Every type counts once per volume: a mark M:R or a filled field S:T in any of its parts.
                 for(int t=0;t<8;t++) {
                     int col=t<6?12+t:18+t-6;counts[t]=indices.Any(i=>t<6?Text(result.Rows[i].Values[col])=="1":Text(result.Rows[i].Values[col])!="")?1:0;
