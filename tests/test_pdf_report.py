@@ -42,6 +42,27 @@ def pdf_pages(data):
     return texts, data
 
 
+def line_spans(data):
+    """Leftmost and rightmost x of the table lines on every page."""
+    objects = {int(m.group(1)): m.group(2) for m in re.finditer(rb'(\d+) 0 obj\n(.*?)\nendobj', data, re.S)}
+    spans = []
+    for number, body in sorted(objects.items()):
+        if not re.search(rb'/Type /Page\b(?!s)', body): continue
+        raw = objects[int(re.search(rb'/Contents (\d+) 0 R', body).group(1))]
+        m = re.search(rb'stream\n(.*)\nendstream', raw, re.S); content = zlib.decompress(m.group(1)).decode('ascii')
+        xs = [float(v) for pair in re.findall(r'([\d.]+) [\d.]+ m ([\d.]+) [\d.]+ l S', content) for v in pair]
+        spans.append((min(xs), max(xs)))
+    return spans
+
+
+def assert_full_width(pdf_path, page_width):
+    """The columns take the whole width between the side margins of each sheet, whatever the height allows."""
+    book = load_workbook(output)
+    for (left, right), sheet in zip(line_spans(pdf_path.read_bytes()), ('СВОД', 'Итоги работы')):
+        margins = book[sheet].page_margins
+        assert abs(left - margins.left * 72) < 0.6 and abs(right - (page_width - margins.right * 72)) < 0.6, (sheet, left, right, page_width)
+
+
 documents = [{3: 'Том 1', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1},
              {3: 'Том 2 (Брошюра 1 из 2)', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1},
              {3: 'Том 2 (Брошюра 2 из 2)', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1},
@@ -86,10 +107,12 @@ assert 'Альтернативное' not in second, 'Only the first table of «
 pdf.unlink()
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04'], check=True, timeout=120)
 assert [box for box, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 595 842'] * 2
+assert_full_width(pdf, 595)
 for paper, box in (('A4-landscape', '0 0 842 595'), ('A3', '0 0 842 1191'), ('A3-landscape', '0 0 1191 842')):
     subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04', paper], check=True, timeout=120)
     assert [b for b, _ in pdf_pages(pdf.read_bytes())[0]] == [box] * 2, (paper, box)
+    assert_full_width(pdf, int(box.split()[2]))
 # The build takes the paper from --pdf-paper.
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', MAIN, str(output), '--pdf-paper=A3-landscape'], check=True, timeout=120)
 assert [b for b, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 1191 842'] * 2
-print('PDF report tests passed: two pages, four papers, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')
+print('PDF report tests passed: two pages, four papers, full-width columns, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')

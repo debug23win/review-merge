@@ -145,18 +145,20 @@ namespace ReviewMerge {
             if(merges!=null)foreach(var mc in merges.Elements(N+"mergeCell")){var p=Regex.Match((string)mc.Attribute("ref")??"",@"^([A-Z]+)(\d+):([A-Z]+)(\d+)$");if(!p.Success)continue;
                 int[] rect={Column(p.Groups[1].Value),int.Parse(p.Groups[2].Value,Inv),Column(p.Groups[3].Value),int.Parse(p.Groups[4].Value,Inv)};merged[(long)rect[1]<<16|(uint)rect[0]]=rect;
                 for(int r=rect[1];r<=rect[3];r++)for(int c=rect[0];c<=rect[2];c++)mergedCells[(long)r<<16|(uint)c]=rect;}
-            // The page of the chosen paper, margins of the sheet in inches; the table is scaled down to fit both ways.
+            // The page of the chosen paper, margins of the sheet in inches. Text and rows are scaled down to fit both ways;
+            // the columns always take the whole width of the page (sx is never smaller than scale).
             double ml=18,mr=18,mt=25.2,mb=25.2;var margins=root.Element(N+"pageMargins");
             if(margins!=null){Func<string,double,double> inch=(name,fallback)=>{double v;return double.TryParse((string)margins.Attribute(name),NumberStyles.Float,Inv,out v)?v*72:fallback;};ml=inch("left",ml);mr=inch("right",mr);mt=inch("top",mt);mb=inch("bottom",mb);}
             double scale=Math.Min(1,Math.Min((pw-ml-mr)/Math.Max(1,width),(ph-mt-mb)/Math.Max(1,height)));
+            double sx=(pw-ml-mr)/Math.Max(1,width);
             var page=pdf.AddPage(pw,ph);
-            Func<double,double> X=v=>ml+v*scale;Func<double,double> Y=v=>ph-mt-v*scale;
+            Func<double,double> X=v=>ml+v*sx;Func<double,double> Y=v=>ph-mt-v*scale;
             Func<int,int,PdfStyle> styleAt=(r,c)=>{Tuple<object,PdfStyle> t;return cells.TryGetValue((long)r<<16|(uint)c,out t)?t.Item2:null;};
             // Fills first, then text, then borders on top.
             foreach(int r in y.Keys)foreach(int c in x.Keys){
                 long key=(long)r<<16|(uint)c;int[] rect;if(mergedCells.TryGetValue(key,out rect)&&(rect[0]!=c||rect[1]!=r))continue;
                 var st=styleAt(r,c);if(st==null||st.Fill==null)continue;int er=rect==null?r:rect[3],ec=rect==null?c:rect[2];
-                page.Rect(X(x[c]),Y(bottom(er)),(right(ec)-x[c])*scale,(bottom(er)-y[r])*scale,st.Fill);
+                page.Rect(X(x[c]),Y(bottom(er)),(right(ec)-x[c])*sx,(bottom(er)-y[r])*scale,st.Fill);
             }
             foreach(int r in y.Keys)foreach(int c in x.Keys){
                 long key=(long)r<<16|(uint)c;Tuple<object,PdfStyle> cell;if(!cells.TryGetValue(key,out cell)||cell.Item1==null)continue;
@@ -166,10 +168,10 @@ namespace ReviewMerge {
                 double left=x[c],top=y[r],w=right(ec)-left,h=bottom(er)-top;
                 string align=st.Horizontal;if(align=="general")align=cell.Item1 is double?"right":cell.Item1 is bool?"center":"left";if(align=="centerContinuous"||align=="distributed"||align=="justify")align="center";if(align=="fill")align="left";
                 // Like Excel, left-aligned text that is not wrapped continues over empty cells to the right.
-                if(rect==null&&!st.Wrap&&align=="left"){double need=font.Width(text)*st.Size+3;int next=c;
+                if(rect==null&&!st.Wrap&&align=="left"){double need=(font.Width(text)*st.Size+3)*scale/sx;int next=c;
                     while(w<need){int k=next+1;while(k<=c2&&!x.ContainsKey(k))k++;if(k>c2)break;long nk=(long)r<<16|(uint)k;Tuple<object,PdfStyle> other;
                         if(mergedCells.ContainsKey(nk)||cells.TryGetValue(nk,out other)&&other.Item1!=null&&PdfFormat.Text(other.Item1,other.Item2.Format)!="")break;next=k;w=right(k)-left;}}
-                page.Text(font,text,st.Size,st.Color,X(left),Y(top+h),w*scale,h*scale,align,st.Vertical,st.Wrap,scale);
+                page.Text(font,text,st.Size,st.Color,X(left),Y(top+h),w*sx,h*scale,align,st.Vertical,st.Wrap,scale);
             }
             var lines=new Dictionary<string,Tuple<double,double,double,double,string,string>>();
             Action<double,double,double,double,string,string> edge=(ax,ay,bx,by,style,color)=>{
