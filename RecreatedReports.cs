@@ -74,6 +74,14 @@ namespace ReviewMerge {
             var a=xf.Element(N+"alignment");a.SetAttributeValue("horizontal",table||size>=16?"center":"left");a.SetAttributeValue("wrapText",table?1:0);
             id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);reportStyleCache[key]=id;return id;
         }
+        // A differential style of conditional formatting: bold, or explicitly not bold; an equal one is reused.
+        int Dxf(bool bold) {
+            var root=styles.Root;var dxfs=root.Element(N+"dxfs");
+            if(dxfs==null){dxfs=new XElement(N+"dxfs",new XAttribute("count",0));(root.Element(N+"cellStyles")??root.Element(N+"cellXfs")).AddAfterSelf(dxfs);}
+            var dxf=new XElement(N+"dxf",new XElement(N+"font",bold?new XElement(N+"b"):new XElement(N+"b",new XAttribute("val",0))));
+            int found=dxfs.Elements().TakeWhile(e=>e.ToString()!=dxf.ToString()).Count();if(found<dxfs.Elements().Count())return found;
+            dxfs.Add(dxf);dxfs.SetAttributeValue("count",found+1);return found;
+        }
         int LeftAligned(int style) {
             string key="left|"+style;int id;if(reportStyleCache.TryGetValue(key,out id))return id;
             var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(style));xf.Element(N+"alignment").SetAttributeValue("horizontal","left");
@@ -155,14 +163,15 @@ namespace ReviewMerge {
             for(int r=top+3;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
             main.Set(top+3,1,"Этап 1",plain);if(mr>top+4)mm.Add("A"+(top+3)+":A"+(mr-1));TableEdges(main,top,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},top+2);
             // Volumes with remarks right above the table: checked up to the report date, resolved in «Замечания устранены», still being resolved.
-            // Each is framed over its block (Всего, Проверено, Осталось проверить), or plain text when the option says so.
+            // Each is two lines of plain text over its block (Всего, Проверено, Осталось проверить), framed when the option says so.
             {double cut=asOf.ToOADate();var remarked=l.Volumes.Where(v=>v.IsVolume&&v.Issue==1&&v.Date.HasValue&&v.Date.Value>0&&v.Date.Value<=cut).ToList();int resolved=remarked.Count(v=>v.Resolved==1);
                 string all="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1)",done="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1,"+range(50,vl)+",1)";
-                var boxes=new[]{Tuple.Create(4,"Всего томов с замечаниями: ",gold,remarked.Count,all),Tuple.Create(8,"Устранено замечаний по томам: ",green,resolved,done),Tuple.Create(12,"Устраняется томов с замечаниями: ",red,remarked.Count-resolved,all+"-"+done)};
+                var boxes=new[]{Tuple.Create(4,"Всего томов\nс замечаниями: ",gold,remarked.Count,all),Tuple.Create(8,"Устранено замечаний\nпо томам: ",green,resolved,done),Tuple.Create(12,"Устраняется томов\nс замечаниями: ",red,remarked.Count-resolved,all+"-"+done)};
                 int line=top-1;
-                foreach(var b in boxes){int st=RecreatedStyle(b.Item3,true);if(options.RemarksWithoutBorders)st=ReportStyle(st,"none","none","none","none");
-                    for(int c=b.Item1;c<b.Item1+4;c++)main.Set(line,c,null,st);main.Set(line,b.Item1,b.Item2+b.Item4.ToString(Inv),st,Literal(b.Item2)+"&("+b.Item5+")");mm.Add(MergeEngine.ExcelColumn(b.Item1)+line+":"+MergeEngine.ExcelColumn(b.Item1+3)+line);}
-                main.Heights[line]=32;}
+                foreach(var b in boxes){int st=RecreatedStyle(b.Item3,true);if(!options.RemarksWithBorders)st=ReportStyle(st,"none","none","none","none");
+                    string[] parts=b.Item2.Split('\n');
+                    for(int c=b.Item1;c<b.Item1+4;c++)main.Set(line,c,null,st);main.Set(line,b.Item1,b.Item2+b.Item4.ToString(Inv),st,Literal(parts[0])+"&CHAR(10)&"+Literal(parts[1])+"&("+b.Item5+")");mm.Add(MergeEngine.ExcelColumn(b.Item1)+line+":"+MergeEngine.ExcelColumn(b.Item1+3)+line);}
+                main.Heights[line]=34;}
             SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+(mr-1)});
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Дополнительные текстовые замечания","Всего замечаний","Томов с любыми замечаниями"};
             string[] statNames={"Файлов в реестре","Проверено файлов","Проверено томов (фрагменты и ИУЛ объединены)","Проверенных файлов с замечаниями","Проверенных томов с замечаниями","Впервые проверено файлов за сутки","Впервые проверено томов за сутки"};
@@ -192,8 +201,8 @@ namespace ReviewMerge {
             // The final pair counts unique boxes/volumes directly, just like the dated summary.
             // It must not add box and volume units together or duplicate a shared box.
             var workPeople=people.Concat(new[]{""}).ToList();
-            for(int i=0;i<workPeople.Count;i++){int c=3+2*i;string who=workPeople[i];work.Set(4,c,who==""?"ВСЕГО":who,header);wm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+1)+"4");work.Set(5,c,"коробов",header);work.Set(5,c+1,"томов",header);for(int j=0;j<2;j++)set(work,6,c+j,metric(2+j,asOf.ToOADate(),cutoff,who,false),green,true,false);}
-            for(int d=0;d<days.Count;d++){int r=7+d;double serial=days[d];bool gray=d%2==1;work.Set(r,2,serial,RecreatedStyle(black,false,df,gray));for(int i=0;i<workPeople.Count;i++)for(int j=0;j<2;j++){bool total=workPeople[i]=="";var v=metric(2+j,serial,"$B"+r,workPeople[i],true);work.Set(r,3+2*i+j,serial>asOf.ToOADate()?(object)"":v.Item1,RecreatedStyle(total?green:black,total,1,gray),"IF($B"+r+">"+cutoff+",\"\","+v.Item2+")");}}
+            for(int i=0;i<workPeople.Count;i++){int c=3+2*i;string who=workPeople[i];work.Set(4,c,who==""?"ВСЕГО":who,header);wm.Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+1)+"4");work.Set(5,c,"коробов",header);work.Set(5,c+1,"томов",header);for(int j=0;j<2;j++){var total=metric(2+j,asOf.ToOADate(),cutoff,who,false);set(work,6,c+j,total,green,total.Item1!=0,false);}}
+            for(int d=0;d<days.Count;d++){int r=7+d;double serial=days[d];bool gray=d%2==1;work.Set(r,2,serial,RecreatedStyle(black,false,df,gray));for(int i=0;i<workPeople.Count;i++)for(int j=0;j<2;j++){bool total=workPeople[i]=="",future=serial>asOf.ToOADate();var v=metric(2+j,serial,"$B"+r,workPeople[i],true);work.Set(r,3+2*i+j,future?(object)"":v.Item1,RecreatedStyle(total?green:black,!future&&v.Item1!=0,1,gray),"IF($B"+r+">"+cutoff+",\"\","+v.Item2+")");}}
             int matrixLast=6+days.Count;wm.Add("A6:A"+matrixLast);TableEdges(work,4,matrixLast,ww,null,Enumerable.Range(0,workPeople.Count).Select(i=>3+2*i));
             // A merged header carries its whole group's right edge, not the thin inner divider.
             for(int i=0;i<workPeople.Count;i++){var cell=work.Rows[4][3+2*i];cell.SetAttributeValue("s",ReportStyle((int)cell.Attribute("s"),right:i==workPeople.Count-1?"thick":"medium"));}
@@ -207,7 +216,12 @@ namespace ReviewMerge {
             var notes=new List<string>();if(previous!=null)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c")){if(cell.Element(N+"f")!=null)continue;string text=Text(Value(cell));if(text.StartsWith("Примечание",StringComparison.OrdinalIgnoreCase)||text.StartsWith("Примечания",StringComparison.OrdinalIgnoreCase))notes.Add(text);}
             foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,heading);mm.Add("A"+r+":S"+r);mr+=2;}
             if(notes.Count>0)SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+mr});
-            SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,16),Col(3,Math.Max(8,ww),ReportColumnWidth(8.9,ReportMaximumDigitWidth(result)))},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)});
+            // Non-zero boxes and volumes of the first table are bold; the rules keep it so when Excel recalculates.
+            string values="C6:"+MergeEngine.ExcelColumn(ww)+matrixLast;
+            var boldRules=new XElement(N+"conditionalFormatting",new XAttribute("sqref",values),
+                new XElement(N+"cfRule",new XAttribute("type","cellIs"),new XAttribute("dxfId",Dxf(true)),new XAttribute("priority",1),new XAttribute("operator","notEqual"),new XElement(N+"formula","0")),
+                new XElement(N+"cfRule",new XAttribute("type","cellIs"),new XAttribute("dxfId",Dxf(false)),new XAttribute("priority",2),new XAttribute("operator","equal"),new XElement(N+"formula","0")));
+            SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,16),Col(3,Math.Max(8,ww),ReportColumnWidth(8.9,ReportMaximumDigitWidth(result)))},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)},boldRules);
         }
     }
 }

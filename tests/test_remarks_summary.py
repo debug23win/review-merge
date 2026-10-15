@@ -3,6 +3,7 @@ import json, shutil, subprocess, uuid
 from datetime import datetime
 from pathlib import Path
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / 'Свод_проверки.exe'
@@ -20,7 +21,7 @@ def book(path, documents):
 
 
 def build(output, *sources):
-    """Sources may include switches such as --remarks-without-borders."""
+    """Sources may include switches such as --remarks-with-borders."""
     subprocess.run([str(EXE), '--batch', str(output), '2026-10-04', MAIN, str(output), *map(str, sources)], check=True, timeout=120)
     return json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 
@@ -31,10 +32,11 @@ def rows(path):
     return {m.cell(r, 3).value: r for r in range(7, m.max_row + 1) if m.cell(r, 3).value}
 
 
-def remarks(path, framed=True):
-    """The three boxes right above the «СВОД» table: cached texts, formulas, merges, colors and frames."""
+def remarks(path, framed=False):
+    """The three values right above the «СВОД» table, two lines each: cached texts, formulas, merges, colors and frames."""
     cached, formulas = load_workbook(path, data_only=True)['СВОД'], load_workbook(path)['СВОД']
-    row = next(r for r in range(1, formulas.max_row + 1) if str(cached.cell(r, 4).value or '').startswith('Всего томов с замечаниями'))
+    row = next(r for r in range(1, formulas.max_row + 1) if str(cached.cell(r, 4).value or '').startswith('Всего томов\nс замечаниями'))
+    assert all(formulas.cell(row, c).alignment.wrap_text for c in (4, 8, 12)) and '&CHAR(10)&' in formulas.cell(row, 4).value, 'two lines in a cell'
     assert row == 4 and formulas.cell(5, 1).value == 'Этап' and formulas.cell(5, 4).value == 'Всего', 'the boxes are right above the table'
     edges = [getattr(formulas.cell(row, c).border, e).style for c in range(4, 16) for e in ('left', 'right', 'top', 'bottom')]
     if framed: assert all(formulas.cell(row, c).border.top.style == 'thin' and formulas.cell(row, c).border.bottom.style == 'thin' for c in range(4, 16)), edges
@@ -66,14 +68,14 @@ assert m['U5'].value == 'Примечание' and m['V5'].value == 'Замеч�
 assert all(m.cell(r, 22).value is None for r in range(7, 14))
 assert m.auto_filter.ref is None or m.auto_filter.ref.split(':')[1].startswith('V')
 # Checked up to 04.10 with remarks: Том 1, Том 2 (both fragments), Том 3. Том 5 is checked later, Том 6 is not checked.
-assert remarks(output) == ['Всего томов с замечаниями: 3', 'Устранено замечаний по томам: 0', 'Устраняется томов с замечаниями: 3']
+assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 0', 'Устраняется томов\nс замечаниями: 3']
 
 # Marks typed in the consolidated book: 1 and a date resolve, «нет» and 0 do not; a volume is resolved when every part with remarks is.
 w = load_workbook(output); m = w[MAIN]; r = rows(output)
 m.cell(r['Том 1'], 22, 1); m.cell(r['Том 2_фрагмент1'], 22, datetime(2026, 10, 4)); m.cell(r['Том 2_фрагмент2'], 22, 'нет'); m.cell(r['Том 3'], 22, 0)
 w.save(output)
 build(output)
-assert remarks(output) == ['Всего томов с замечаниями: 3', 'Устранено замечаний по томам: 1', 'Устраняется томов с замечаниями: 2']
+assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 1', 'Устраняется томов\nс замечаниями: 2']
 m = load_workbook(output)[MAIN]
 assert m.cell(r['Том 2_фрагмент1'], 22).value == datetime(2026, 10, 4) and m.cell(r['Том 2_фрагмент1'], 22).is_date, 'a date stays a date, its cell keeps its format'
 assert m.cell(r['Том 1'], 22).value == 1 and m.cell(r['Том 2_фрагмент2'], 22).value == 'нет'
@@ -87,7 +89,7 @@ build(output, reviewer)
 m = load_workbook(output)[MAIN]
 assert [m.cell(r[name], 22).value for name in ('Том 1', 'Том 2_фрагмент2', 'Том 3')] == [1, 1, 'да']
 assert m.cell(r['Том 5'], 22).value == datetime(2026, 10, 6) and m.cell(r['Том 5'], 22).number_format.lower() == 'dd.mm.yyyy', 'a new date gets the date format'
-assert remarks(output) == ['Всего томов с замечаниями: 3', 'Устранено замечаний по томам: 3', 'Устраняется томов с замечаниями: 0']
+assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 3', 'Устраняется томов\nс замечаниями: 0']
 
 # The reference sheet keeps the rule as formulas: an open remark per file and a resolved flag per volume.
 reference = load_workbook(output)['Справка по томам']
@@ -97,13 +99,29 @@ open_cell = reference.cell(7, heads['Замечание не устранено'
 assert open_cell.startswith('=IF(') and "'Все загруженные файлы'!V" in open_cell and '"НЕТ"' in open_cell, open_cell
 assert reference.cell(7, heads['Замечания тома устранены']).value.startswith('=IF(AND(')
 
-# The option prints the same values as plain text, without frames.
-build(output, '--remarks-without-borders')
-assert remarks(output, framed=False) == ['Всего томов с замечаниями: 3', 'Устранено замечаний по томам: 3', 'Устраняется томов с замечаниями: 0']
+# Plain text by default; the option frames the same values.
+build(output, '--remarks-with-borders')
+assert remarks(output, framed=True) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 3', 'Устраняется томов\nс замечаниями: 0']
+
+# «Итоги работы»: non-zero boxes and volumes of the first table are bold, zeros are not; rules keep it so in Excel.
+work, values = load_workbook(output)['Итоги работы'], load_workbook(output, data_only=True)['Итоги работы']
+last = 6  # the first table ends at its last date row; the alternative table below has dates too
+while isinstance(values.cell(last + 1, 2).value, datetime): last += 1
+checked = 0
+for r in range(6, last + 1):
+    for c in range(3, work.max_column + 1):
+        v = values.cell(r, c).value
+        if isinstance(v, (int, float)):
+            assert bool(work.cell(r, c).font.b) == (v != 0), (r, c, v, work.cell(r, c).font.b); checked += 1
+assert checked >= 20 and any(values.cell(r, c).value == 0 for r in range(7, last + 1) for c in range(3, 8))
+rules = [(rule.operator, rule.formula) for cf in work.conditional_formatting for rule in cf.rules]
+assert ('notEqual', ['0']) in rules and ('equal', ['0']) in rules, rules
+total = next(c for c in range(3, work.max_column + 1) if work.cell(4, c).value == 'ВСЕГО')
+assert any(str(cf.sqref) == 'C6:%s%d' % (get_column_letter(total + 1), last) for cf in work.conditional_formatting), [str(cf.sqref) for cf in work.conditional_formatting]
 
 # The work totals title is not merged; the PDF shows the boxes on the first page.
 work = load_workbook(output)['Итоги работы']
 assert not any(str(x).startswith('A1:') for x in work.merged_cells.ranges) and work['A1'].alignment.horizontal == 'left'
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 assert report['PdfError'] is None and Path(report['Pdf']).exists(), report
-print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, boxes above the summary table with or without frames, formulas and unmerged title')
+print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title')

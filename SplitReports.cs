@@ -71,9 +71,10 @@ namespace ReviewMerge {
                 return a.Sheet==destination?result:"'"+a.Sheet.Replace("'","''")+"'!"+result;
             });
         }
-        void SaveReport(string name,Grid g,int width,IEnumerable<XElement> columns,List<string> merges,string[] printAreas) {
+        void SaveReport(string name,Grid g,int width,IEnumerable<XElement> columns,List<string> merges,string[] printAreas,XElement conditional=null) {
             var doc=Sheet(g,columns,false,width);var pr=doc.Root.Element(N+"sheetPr");pr.Add(new XElement(N+"outlinePr",new XAttribute("summaryBelow",0)),new XElement(N+"pageSetUpPr",new XAttribute("fitToPage",1)));
             doc.Root.Element(N+"sheetData").AddAfterSelf(new XElement(N+"mergeCells",new XAttribute("count",merges.Count),merges.Select(a=>new XElement(N+"mergeCell",new XAttribute("ref",a)))));
+            if(conditional!=null)doc.Root.Element(N+"mergeCells").AddAfterSelf(conditional);
             doc.Root.Add(new XElement(N+"pageMargins",new XAttribute("left",.25),new XAttribute("right",.25),new XAttribute("top",.35),new XAttribute("bottom",.35),new XAttribute("header",.15),new XAttribute("footer",.15)),
                 new XElement(N+"pageSetup",new XAttribute("paperSize",9),new XAttribute("orientation","landscape"),new XAttribute("fitToWidth",1),new XAttribute("fitToHeight",1)));
             PutSheet(name,doc);

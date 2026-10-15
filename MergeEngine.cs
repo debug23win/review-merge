@@ -46,8 +46,8 @@ namespace ReviewMerge {
         public bool KeepLegacyReport;
         // Paper of the PDF made after the build.
         public PdfPaper PdfPaper;
-        // The volumes with remarks above «СВОД» as plain text, without frames.
-        public bool RemarksWithoutBorders;
+        // The volumes with remarks above «СВОД» are plain text; true frames each of them.
+        public bool RemarksWithBorders;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
         public Func<string, string, bool> SamePerson;
         // A saved answer for such a pair, if any: initials that agree merge people without a question unless the operator said "no" before.
