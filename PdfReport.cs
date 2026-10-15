@@ -28,7 +28,7 @@ namespace ReviewMerge {
     }
 
     // What the build writes as PDF: the paper, separate files (the default) or one file, and the file names.
-    // Names may contain {книга} (the workbook name) and {дата} (the report date, dd.MM.yyyy).
+    // Names may contain {книга} (the workbook name) and {дата} (the report date, yyyy.MM.dd).
     public sealed class PdfSettings {
         public const string SummaryDefault="{книга} СВОД {дата}",WorkDefault="{книга} Итоги работы {дата}",CombinedDefault="{книга} {дата}";
         public PdfPaper Paper;
@@ -45,7 +45,7 @@ namespace ReviewMerge {
     public static class PdfReport {
         // The file of a name pattern next to the workbook: placeholders filled, characters Windows forbids replaced.
         public static string PathFor(string workbook,DateTime asOf,string pattern,string fallback) {
-            string name=Regex.Replace(string.IsNullOrWhiteSpace(pattern)?fallback:pattern,@"\{(книга|дата)\}",m=>m.Groups[1].Value.ToLowerInvariant()=="книга"?Path.GetFileNameWithoutExtension(workbook):asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture),RegexOptions.IgnoreCase);
+            string name=Regex.Replace(string.IsNullOrWhiteSpace(pattern)?fallback:pattern,@"\{(книга|дата)\}",m=>m.Groups[1].Value.ToLowerInvariant()=="книга"?Path.GetFileNameWithoutExtension(workbook):asOf.ToString("yyyy.MM.dd",CultureInfo.InvariantCulture),RegexOptions.IgnoreCase);
             name=Regex.Replace(name,@"[\\/:*?""<>|\x00-\x1f]","_").Trim().TrimEnd('.');
             if(name.EndsWith(".pdf",StringComparison.OrdinalIgnoreCase))name=name.Substring(0,name.Length-4).TrimEnd();
             return Path.Combine(Path.GetDirectoryName(workbook),(name==""?"PDF":name)+".pdf");

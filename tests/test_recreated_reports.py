@@ -138,9 +138,15 @@ def report_snapshot(path):
     cached.close()
     return result
 
-def run(output, source, as_of=AS_OF):
+def run(output, source, as_of=AS_OF, *switches):
     subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output),
-                    as_of.strftime('%Y-%m-%d'), MAIN, str(source)], check=True, timeout=90)
+                    as_of.strftime('%Y-%m-%d'), MAIN, str(source), *switches], check=True, timeout=90)
+
+
+def report_values(path):
+    """Cached numbers and texts of the four reports, without formulas."""
+    cached = load_workbook(path, data_only=True)
+    return {name: {c.coordinate: c.value for row in cached[name] for c in row} for name in REPORTS}
 
 def validate(path):
     w = load_workbook(path)
@@ -462,8 +468,16 @@ def test_reviewer_histories_and_global_totals():
     book.close()
     cached.close()
     before = report_snapshot(target)
-    run(target, source)
+    run(target, source, AS_OF, '--recalculate-history')
     assert report_snapshot(target) == before, 'Repeat merge changed formulas, caches, grouping, dimensions or styles'
+    # A plain repeat build keeps the numbers of the days before the report date as values; the report date stays a formula.
+    values = report_values(target)
+    run(target, source)
+    assert report_values(target) == values, 'Freezing past days changed a number'
+    summary = load_workbook(target)['СВОД']
+    rows = {summary.cell(r, 2).value: r for r in range(8, summary.max_row + 1) if isinstance(summary.cell(r, 2).value, datetime)}
+    past, today = rows[min(rows)], rows[AS_OF]
+    assert not str(summary.cell(past, 10).value).startswith('=') and str(summary.cell(today, 10).value).startswith('='), (summary.cell(past, 10).value, summary.cell(today, 10).value)
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
 
 
@@ -494,7 +508,7 @@ def test_no_reviewers():
     book.close()
     cached.close()
     before = report_snapshot(target)
-    run(target, source)
+    run(target, source, AS_OF, '--recalculate-history')
     assert report_snapshot(target) == before, 'Zero-reviewer repeat merge changed reports'
 
 

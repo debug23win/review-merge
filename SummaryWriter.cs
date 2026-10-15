@@ -49,7 +49,6 @@ namespace ReviewMerge {
             var rows=indices.Select(i=>i+7).OrderBy(i=>i).ToList();var ranges=new List<string>();string c="$"+MergeEngine.ExcelColumn(col)+"$";
             for(int n=0;n<rows.Count;n++){int first=rows[n],last=first;while(n+1<rows.Count&&rows[n+1]==last+1){last=rows[++n];}ranges.Add(c+first+(last==first?"":":"+c+last));}return string.Join(",",ranges);
         }
-        static string VolumeKey(MergedRow row) {return Rules.VolumeKey(row.Values[2],row.Values[3]);}
         // Excel limits a text constant in a formula to 255 characters.
         static string Literal(string s) {
             s=s??"";var parts=new List<string>();
@@ -130,7 +129,7 @@ namespace ReviewMerge {
             string numbers="$"+MergeEngine.ExcelColumn(h+30)+"$2";g.Set(2,h+30,";"+string.Join(";",Enumerable.Range(1,1000))+";",bodyStyle);
             string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h),rawNames=LocalRange(h+9,7,last),boxLists=LocalRange(h,7,last);
             string knownNames=LocalRange(h+45,7,Math.Max(7,referenceLayout.NameTable.Count+6)),knownBoxes=LocalRange(h+44,referenceLayout.ManifestStart,Math.Max(referenceLayout.ManifestStart,referenceLayout.BoxEnd));
-            var volumeKeys=result.Rows.Select(VolumeKey).ToList();
+            var volumeKeys=result.VolumeKeys;
             for(int i=0;i<result.Rows.Count;i++) {
                 int rn=i+7,mr=rowNumbers[i];var row=result.Rows[i];string x=MergeEngine.ExcelColumn(h+3)+rn,rawRef=MergeEngine.ExcelColumn(h+9)+rn;
                 string kind=MainCell(name,"K",mr),box=MainCell(name,"L",mr),who=MainCell(name,"I",mr),file=MainCell(name,"C",mr),date=MainCell(name,"J",mr);

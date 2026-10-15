@@ -112,6 +112,32 @@ namespace ReviewMerge {
             }
             return Regex.Replace(name, @"\s+", " ").Trim();
         }
+        // Volumes of the records. Records with one «Номер тома» are one volume, whatever their file names. A record without the
+        // number joins the numbered volume of its file name (an ИУЛ next to its volume) when exactly one number goes with that name;
+        // otherwise the file name decides, as before. A bare «б/н» («без номера»), «нет» or a dash is no number. notes get the numbers
+        // that join files of different names.
+        public static List<string> VolumeKeys(IList<MergedRow> rows, List<string> notes = null) {
+            var names = rows.Select(r => VolumeKey(r.Values[2], r.Values[3])).ToList();
+            var numbers = rows.Select(r => { string n = XlsxReader.Normal(r.VolumeNumber); return Regex.IsMatch(n, @"^(?:Б\s*/?\s*Н|БЕЗ НОМЕРА|НЕТ|[-–—]+)\.?$") ? "" : n; }).ToList();
+            var numbersOfName = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            for (int i = 0; i < rows.Count; i++) {
+                if (numbers[i] == "") continue;
+                HashSet<string> set; if (!numbersOfName.TryGetValue(names[i], out set)) numbersOfName[names[i]] = set = new HashSet<string>(StringComparer.Ordinal);
+                set.Add(numbers[i]);
+            }
+            var keys = new List<string>();
+            for (int i = 0; i < rows.Count; i++) {
+                string number = numbers[i]; HashSet<string> set;
+                if (number == "" && numbersOfName.TryGetValue(names[i], out set) && set.Count == 1) number = set.First();
+                keys.Add(number != "" ? "№ " + number : names[i]);
+            }
+            if (notes != null)
+                foreach (var g in Enumerable.Range(0, rows.Count).Where(i => numbers[i] != "").GroupBy(i => numbers[i], StringComparer.Ordinal)) {
+                    var files = g.GroupBy(i => names[i], StringComparer.Ordinal).Select(n => Text(rows[n.First()].Values[2])).ToList();
+                    if (files.Count > 1) notes.Add("«" + Text(rows[g.First()].VolumeNumber) + "»: " + string.Join("; ", files.Select(n => "«" + n + "»")));
+                }
+            return keys;
+        }
         // ИУЛ is a part of a volume, never a volume of its own: "…-УЛ", "…-ИУЛ", "…-УЛ-ГТСС1".
         public static bool IsUl(object file, object ext) {
             return Regex.IsMatch(FileStem(file, ext), @"(?:^|[-_ \(\[])И?УЛ(?:$|[-_ \)\]])");
