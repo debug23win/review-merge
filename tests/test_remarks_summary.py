@@ -56,6 +56,7 @@ documents = [{3: 'Том 1', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 13
              {3: 'Том 2_фрагмент1', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 19: 'Ошибка описи'},
              {3: 'Том 2_фрагмент2', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 20: 'Примечание'},
              {3: 'Том 3', 9: 'Борис', 10: datetime(2026, 10, 3), 12: 2, 14: 1},
+             {3: 'Том 3-УЛ', 9: 'Борис', 10: datetime(2026, 10, 3), 12: 2},
              {3: 'Том 4', 9: 'Борис', 10: datetime(2026, 10, 3), 12: 2},
              {3: 'Том 5', 9: 'Борис', 10: datetime(2026, 10, 5), 12: 3, 13: 1},
              {3: 'Том 6', 12: 3, 19: 'Не проверен'}]
@@ -65,38 +66,39 @@ build(output)
 # The column is added after «Примечание» with the header, its number and an empty cell for every document.
 m = load_workbook(output)[MAIN]
 assert m['U5'].value == 'Примечание' and m['V5'].value == 'Замечания устранены' and m['V6'].value == 22, [m.cell(5, c).value for c in range(19, 24)]
-assert all(m.cell(r, 22).value is None for r in range(7, 14))
+assert all(m.cell(r, 22).value is None for r in range(7, 15))
 assert m.auto_filter.ref is None or m.auto_filter.ref.split(':')[1].startswith('V')
-# Checked up to 04.10 with remarks: Том 1, Том 2 (both fragments), Том 3. Том 5 is checked later, Том 6 is not checked.
+# Checked up to 04.10 with remarks: Том 1, Том 2 (both fragments), Том 3 (with its ИУЛ). Том 5 is checked later, Том 6 is not checked.
 assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 0', 'Устраняется томов\nс замечаниями: 3']
 
-# Marks typed in the consolidated book: 1 and a date resolve, «нет» and 0 do not; a volume is resolved when every part with remarks is.
+# Marks typed in the consolidated book: 1 and a date resolve, «нет» and 0 do not; a mark in any part resolves the volume.
 w = load_workbook(output); m = w[MAIN]; r = rows(output)
 m.cell(r['Том 1'], 22, 1); m.cell(r['Том 2_фрагмент1'], 22, datetime(2026, 10, 4)); m.cell(r['Том 2_фрагмент2'], 22, 'нет'); m.cell(r['Том 3'], 22, 0)
 w.save(output)
 build(output)
-assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 1', 'Устраняется томов\nс замечаниями: 2']
+assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 2', 'Устраняется томов\nс замечаниями: 1']
 m = load_workbook(output)[MAIN]
 assert m.cell(r['Том 2_фрагмент1'], 22).value == datetime(2026, 10, 4) and m.cell(r['Том 2_фрагмент1'], 22).is_date, 'a date stays a date, its cell keeps its format'
 assert m.cell(r['Том 1'], 22).value == 1 and m.cell(r['Том 2_фрагмент2'], 22).value == 'нет'
 
 # A reviewer's file with the column updates the consolidated book: a filled value of a later file wins, an empty one changes nothing.
+# The ИУЛ has no remarks of its own; its mark resolves Том 3 all the same.
 reviewer = B / 'Борис.xlsx'; shutil.copy(output, reviewer)
 w = load_workbook(reviewer); m = w[MAIN]
-m.cell(r['Том 2_фрагмент2'], 22, 1); m.cell(r['Том 3'], 22, 'да'); m.cell(r['Том 1'], 22, None); m.cell(r['Том 5'], 22, datetime(2026, 10, 6))
+m.cell(r['Том 2_фрагмент2'], 22, 1); m.cell(r['Том 3-УЛ'], 22, 'да'); m.cell(r['Том 1'], 22, None); m.cell(r['Том 5'], 22, datetime(2026, 10, 6))
 w.save(reviewer)
 build(output, reviewer)
 m = load_workbook(output)[MAIN]
-assert [m.cell(r[name], 22).value for name in ('Том 1', 'Том 2_фрагмент2', 'Том 3')] == [1, 1, 'да']
+assert [m.cell(r[name], 22).value for name in ('Том 1', 'Том 2_фрагмент2', 'Том 3', 'Том 3-УЛ')] == [1, 1, 0, 'да']
 assert m.cell(r['Том 5'], 22).value == datetime(2026, 10, 6) and m.cell(r['Том 5'], 22).number_format.lower() == 'dd.mm.yyyy', 'a new date gets the date format'
 assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 3', 'Устраняется томов\nс замечаниями: 0']
 
-# The reference sheet keeps the rule as formulas: an open remark per file and a resolved flag per volume.
+# The reference sheet keeps the rule as formulas: a mark per file and a resolved flag per volume.
 reference = load_workbook(output)['Справка по томам']
 heads = {reference.cell(6, c).value: c for c in range(1, reference.max_column + 1) if reference.cell(6, c).value}
-assert 'Замечание не устранено' in heads and 'Замечания тома устранены' in heads, sorted(h for h in heads if isinstance(h, str))[:5]
-open_cell = reference.cell(7, heads['Замечание не устранено']).value
-assert open_cell.startswith('=IF(') and "'Все загруженные файлы'!V" in open_cell and '"НЕТ"' in open_cell, open_cell
+assert 'Отмечено устранение' in heads and 'Замечания тома устранены' in heads, sorted(h for h in heads if isinstance(h, str))[:5]
+mark_cell = reference.cell(7, heads['Отмечено устранение']).value
+assert mark_cell.startswith('=IF(') and "'Все загруженные файлы'!V" in mark_cell and '"НЕТ"' in mark_cell, mark_cell
 assert reference.cell(7, heads['Замечания тома устранены']).value.startswith('=IF(AND(')
 
 # Plain text by default; the option frames the same values.
@@ -124,4 +126,4 @@ work = load_workbook(output)['Итоги работы']
 assert not any(str(x).startswith('A1:') for x in work.merged_cells.ranges) and work['A1'].alignment.horizontal == 'left'
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 assert report['PdfError'] is None and Path(report['Pdf']).exists(), report
-print('Remarks summary tests passed: resolved column, merge from files, per-volume rule, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title')
+print('Remarks summary tests passed: resolved column, merge from files, a mark in any part resolves the volume, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title')
