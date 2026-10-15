@@ -70,8 +70,9 @@ documents = [{3: 'Том 1', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1},
 output = book(B / 'svod.xlsx', documents)
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', MAIN, str(output)], check=True, timeout=120)
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
-pdf = Path(report['Pdf'])
-assert report['PdfError'] is None and pdf.name == 'svod 04.10.2026.pdf' and pdf.parent == output.parent, report
+# Separate files by default, named «<книга> СВОД <дата>» and «<книга> Итоги работы <дата>».
+summary_pdf, work_pdf = B / 'svod СВОД 04.10.2026.pdf', B / 'svod Итоги работы 04.10.2026.pdf'
+assert report['PdfError'] is None and report['Pdfs'] == [str(summary_pdf), str(work_pdf)] and report['Pdf'] == str(summary_pdf), report
 
 cached = load_workbook(output, data_only=True)
 work = cached['Итоги работы']
@@ -91,12 +92,13 @@ assert [summary.cell(r, 2).value for r in (last + 1, last + 2)] == ['Анна', 
 assert not any(summary.row_dimensions[r].hidden for r in (last + 1, last + 2)) and not summary.row_dimensions[last].collapsed
 assert all(summary.row_dimensions[r].hidden for r in (earlier + 1, earlier + 2)) and summary.row_dimensions[earlier].collapsed
 
-pages, data = pdf_pages(pdf.read_bytes())
-assert data.startswith(b'%PDF-1.7') and data.rstrip().endswith(b'%%EOF')
-assert len(pages) == 2, len(pages)
-assert all(box == '0 0 595 842' for box, _ in pages), ('A4 portrait by default', [box for box, _ in pages])
-assert b'/FontFile2' in data and b'/ToUnicode' in data
-first, second = pages[0][1], pages[1][1]
+pages, data = pdf_pages(summary_pdf.read_bytes())
+work_pages, work_data = pdf_pages(work_pdf.read_bytes())
+for d in (data, work_data):
+    assert d.startswith(b'%PDF-1.7') and d.rstrip().endswith(b'%%EOF') and b'/FontFile2' in d and b'/ToUnicode' in d
+assert len(pages) == 1 and len(work_pages) == 1, (len(pages), len(work_pages))
+assert [box for box, _ in pages + work_pages] == ['0 0 595 842'] * 2, 'A4 portrait by default'
+first, second = pages[0][1], work_pages[0][1]
 assert 'СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ' in first and 'Проверено за сутки' in first and '04.10.2026' in first, first[:300]
 assert 'ИТОГАМ РАБОТЫ' not in first and 'Альтернативное' not in first
 assert first.index('Всего томов с замечаниями:') < first.index('Проверено за сутки'), 'the volumes with remarks are printed above the table'
@@ -104,16 +106,41 @@ assert 'Анна' in first and 'Борис' in first, 'reviewers of the expanded
 assert 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ' in second and 'Анна' in second and 'Борис' in second and 'ВСЕГО' in second, second[:300]
 assert 'Альтернативное' not in second, 'Only the first table of «Итоги работы» is on the second page'
 
-# The PDF alone can be made again from the saved workbook, on any of the four papers.
-pdf.unlink()
+# The PDF alone can be made again from the saved workbook: two files, or one file of two pages on any of the four papers.
+summary_pdf.unlink(); work_pdf.unlink()
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04'], check=True, timeout=120)
+assert summary_pdf.exists() and work_pdf.exists()
+pdf = B / 'svod 04.10.2026.pdf'
+subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04', '--pdf-combined'], check=True, timeout=120)
 assert [box for box, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 595 842'] * 2
 assert_full_width(pdf, 595)
 for paper, box in (('A4-landscape', '0 0 842 595'), ('A3', '0 0 842 1191'), ('A3-landscape', '0 0 1191 842')):
-    subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04', paper], check=True, timeout=120)
+    subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--pdf', str(output), '2026-10-04', paper, '--pdf-combined'], check=True, timeout=120)
     assert [b for b, _ in pdf_pages(pdf.read_bytes())[0]] == [box] * 2, (paper, box)
     assert_full_width(pdf, int(box.split()[2]))
-# The build takes the paper from --pdf-paper.
-subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', MAIN, str(output), '--pdf-paper=A3-landscape'], check=True, timeout=120)
-assert [b for b, _ in pdf_pages(pdf.read_bytes())[0]] == ['0 0 1191 842'] * 2
-print('PDF report tests passed: two pages, four papers, full-width columns, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')
+
+
+def build(*switches):
+    subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(output), '2026-10-04', MAIN, str(output), *switches], check=True, timeout=120)
+    return json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
+
+
+# The build takes the paper, one file and its name from the switches.
+pdf.unlink()
+report = build('--pdf-paper=A3-landscape', '--pdf-combined', '--pdf-name=Свод {книга} на {дата}')
+one = B / 'Свод svod на 04.10.2026.pdf'
+assert report['Pdfs'] == [str(one)] and [b for b, _ in pdf_pages(one.read_bytes())[0]] == ['0 0 1191 842'] * 2, report
+# Names of the two files; characters Windows forbids become «_», a typed «.pdf» is not doubled.
+report = build('--pdf-name-summary=Отчёт {дата}.pdf', '--pdf-name-work=Работа: {книга}')
+assert report['Pdfs'] == [str(B / 'Отчёт 04.10.2026.pdf'), str(B / 'Работа_ svod.pdf')], report
+report = build('--pdf-name-summary=Одно', '--pdf-name-work=одно')
+assert report['Pdfs'] == [] and 'одинаковое имя' in report['PdfError'] and not (B / 'Одно.pdf').exists(), report
+# A file that cannot be replaced (open in another program; here a folder of that name) gives «имя (1).pdf», then «имя (2).pdf».
+summary_pdf.unlink(); summary_pdf.mkdir()
+report = build()
+indexed = B / 'svod СВОД 04.10.2026 (1).pdf'
+assert report['PdfError'] is None and report['Pdfs'] == [str(indexed), str(work_pdf)], report
+assert any('открыт в другой программе' in line and indexed.name in line for line in report['Log']), report['Log'][-3:]
+(B / 'svod СВОД 04.10.2026 (2).pdf').mkdir(); indexed.unlink(); indexed.mkdir()
+assert build()['Pdfs'][0] == str(B / 'svod СВОД 04.10.2026 (3).pdf')
+print('PDF report tests passed: separate and combined files, names, indexed busy files, four papers, full-width columns, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')
