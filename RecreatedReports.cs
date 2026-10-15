@@ -142,6 +142,8 @@ namespace ReviewMerge {
                     }for(int b=0;b<4;b++)colorCells(main,r,4+b*4,7+b*4,new[]{gold,green,red,blue}[b]);
                 }group(main,summary+1,mr-1,"",true);if(names.Count>0)main.Templates[summary]=new XElement(N+"row",new XAttribute("r",summary),new XAttribute("collapsed",1));
             }
+            // Percentages of the summary are italic, size 9; their colors, borders, fill and format stay.
+            for(int r=7;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
             main.Set(7,1,"Этап 1",plain);if(mr>8)mm.Add("A7:A"+(mr-1));TableEdges(main,4,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},6);
             SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+(mr-1)});
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Дополнительные текстовые замечания","Всего замечаний","Томов с любыми замечаниями"};
@@ -183,7 +185,7 @@ namespace ReviewMerge {
             }work.Set(alt+2,1,"Этап 1",plain);if(ar>alt+3)wm.Add("A"+(alt+2)+":A"+(ar-1));TableEdges(work,alt+1,ar-1,8);
             // Keep the user's free-form notes from the old report, without copying its old tables.
             var notes=new List<string>();if(previous!=null)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c")){if(cell.Element(N+"f")!=null)continue;string text=Text(Value(cell));if(text.StartsWith("Примечание",StringComparison.OrdinalIgnoreCase)||text.StartsWith("Примечания",StringComparison.OrdinalIgnoreCase))notes.Add(text);}
-            foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,plain);mm.Add("A"+r+":S"+r);mr+=2;}
+            foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,heading);mm.Add("A"+r+":S"+r);mr+=2;}
             if(notes.Count>0)SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+mr});
             SaveReport("Итоги работы",work,Math.Max(8,ww),new[]{Col(1,1,10),Col(2,2,16),Col(3,Math.Max(8,ww),ReportColumnWidth(8.9,ReportMaximumDigitWidth(result)))},wm,new[]{"A1:"+MergeEngine.ExcelColumn(ww)+matrixLast,"A"+alt+":H"+(ar-1)});
         }

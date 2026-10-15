@@ -91,7 +91,7 @@ namespace ReviewMerge {
         public static string BoxListDisplay(string list) { return string.Join(", ", (list ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(BoxDisplay)); }
         public static bool PlainBoxNumber(object box) { bool valid; var list = ParseBoxes(box, out valid); return valid && list.Count == 1 && Regex.IsMatch(Text(box), @"^\d+(?:\.0+)?$"); }
 
-        // Volume: fragments and parts ("Фрагмент 2", "_фрагмент1", "_Часть1", "(Часть 6.2)"), changes ("_изм.1") and the ИУЛ ending
+        // Volume: fragments, parts and brochures ("Фрагмент 2", "_фрагмент1", "_Часть1", "(Часть 6.2)", "(Брошюра 1 из 12)"), changes ("_изм.1") and the ИУЛ ending
         // ("-УЛ", "-ИУЛ", also with an organization or number after it: "-УЛ-ГТСС1", "-УЛ-2") belong to one volume.
         static string FileStem(object file, object ext) {
             string name = XlsxReader.Normal(file), e = XlsxReader.Normal(ext).TrimStart('.');
@@ -101,7 +101,7 @@ namespace ReviewMerge {
         public static string VolumeKey(object file, object ext) {
             string name = FileStem(file, ext);
             for (int i = 0; i < 2; i++) {
-                name = Regex.Replace(name, @"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])(?:ФРАГМЕНТ|ЧАСТЬ)\s*(?:№|N)?\s*\d+(?:\.\d+)*(?:\s*ИЗ\s*\d+)?[\)\]]*", "");
+                name = Regex.Replace(name, @"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])(?:ФРАГМЕНТ|ЧАСТЬ|БРОШЮРА)\s*(?:№|N)?\s*\d+(?:\.\d+)*(?:\s*ИЗ\s*\d+)?[\)\]]*", "");
                 name = Regex.Replace(name, @"[\(\[ _,\-]+ИЗМ[.\s]*\d+[\)\]]*$", "");
                 name = Regex.Replace(name, @"[-_ ]+[\(\[]?И?УЛ[\)\]]?(?:[-_ ]+[\p{L}\p{N}]+)?$", "");
             }

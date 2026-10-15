@@ -54,6 +54,8 @@ namespace ReviewMerge {
     public sealed class MergeResult {
         public int Files, Documents, Reviewed, WithIssues, Boxes, DatesAssignedToday, FilledRows;
         public string Output;
+        // The two-page PDF of «СВОД» and «Итоги работы» next to the workbook, or why it was not made.
+        public string Pdf, PdfError;
         public readonly List<Conflict> Conflicts = new List<Conflict>();
         public readonly List<Problem> Problems = new List<Problem>();
         public readonly List<SourceRow> History = new List<SourceRow>();
@@ -348,7 +350,12 @@ namespace ReviewMerge {
                     string backup=output+".backup-"+DateTime.Now.ToString("yyyyMMdd-HHmmssfff",Inv);
                     File.Replace(temp,output,backup);progress(97,"Предыдущий результат сохранён: "+Path.GetFileName(backup));
                 } else {if(File.Exists(output))throw new IOException("Файл результата появился во время сборки. Повторите сборку.");File.Move(temp,output);}
-                result.Output=output;progress(100,"Готово: "+result.Documents+" документов, "+result.Conflicts.Count+" конфликтов, "+result.Problems.Count+" проблем данных");return result;
+                result.Output=output;
+                if(!options.KeepLegacyReport) {
+                    try {result.Pdf=PdfReport.Write(output,asOf);progress(99,"PDF: "+Path.GetFileName(result.Pdf));}
+                    catch(Exception ex) {result.PdfError=ex.Message;progress(99,"PDF не создан: "+ex.Message);}
+                }
+                progress(100,"Готово: "+result.Documents+" документов, "+result.Conflicts.Count+" конфликтов, "+result.Problems.Count+" проблем данных");return result;
             } finally { if(File.Exists(temp)) { try {File.Delete(temp);}catch{} } }
         }
     }
