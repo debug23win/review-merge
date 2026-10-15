@@ -27,24 +27,57 @@ namespace ReviewMerge {
         }
     }
 
-    // A two-page PDF of the finished workbook: the «СВОД» table on the first page and the first table of
-    // «Итоги работы» on the second, each scaled so that all its columns fit one page of the chosen paper.
+    // What the build writes as PDF: the paper, separate files (the default) or one file, and the file names.
+    // Names may contain {книга} (the workbook name) and {дата} (the report date, dd.MM.yyyy).
+    public sealed class PdfSettings {
+        public const string SummaryDefault="{книга} СВОД {дата}",WorkDefault="{книга} Итоги работы {дата}",CombinedDefault="{книга} {дата}";
+        public PdfPaper Paper;
+        public bool Combined;
+        public string SummaryName=SummaryDefault,WorkName=WorkDefault,CombinedName=CombinedDefault;
+    }
+    // A written PDF; Path differs from Requested when the requested file was open in another program.
+    public sealed class PdfFile { public string Path,Requested; }
+
+    // PDF of the finished workbook: the «СВОД» table and the first table of «Итоги работы», each on its own page
+    // and scaled so that all its columns fit the page of the chosen paper; two files or one file of two pages.
     // The tables are drawn from the saved cells (values, number formats, fonts, fills, borders, merges),
     // so the PDF shows what Excel shows. Excel and a printer are not needed.
     public static class PdfReport {
-        public static string PathFor(string workbook,DateTime asOf) {
-            return Path.Combine(Path.GetDirectoryName(workbook),Path.GetFileNameWithoutExtension(workbook)+" "+asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture)+".pdf");
+        // The file of a name pattern next to the workbook: placeholders filled, characters Windows forbids replaced.
+        public static string PathFor(string workbook,DateTime asOf,string pattern,string fallback) {
+            string name=Regex.Replace(string.IsNullOrWhiteSpace(pattern)?fallback:pattern,@"\{(книга|дата)\}",m=>m.Groups[1].Value.ToLowerInvariant()=="книга"?Path.GetFileNameWithoutExtension(workbook):asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture),RegexOptions.IgnoreCase);
+            name=Regex.Replace(name,@"[\\/:*?""<>|\x00-\x1f]","_").Trim().TrimEnd('.');
+            if(name.EndsWith(".pdf",StringComparison.OrdinalIgnoreCase))name=name.Substring(0,name.Length-4).TrimEnd();
+            return Path.Combine(Path.GetDirectoryName(workbook),(name==""?"PDF":name)+".pdf");
         }
-        public static string Write(string workbook,DateTime asOf,PdfPaper paper=PdfPaper.A4Portrait) {
-            var book=new PdfWorkbook(workbook);var pdf=new PdfDocument("Свод проверки "+asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture));var size=PdfPapers.Size(paper);
-            book.Render(pdf,"СВОД",0,size[0],size[1]);book.Render(pdf,"Итоги работы",0,size[0],size[1]);
-            string path=PathFor(workbook,asOf),temp=path+".tmp";
-            File.WriteAllBytes(temp,pdf.Save());
-            try {if(File.Exists(path))File.Delete(path);File.Move(temp,path);}
-            catch(IOException){File.Delete(temp);throw new IOException("закройте «"+Path.GetFileName(path)+"» в программе просмотра и повторите сборку.");}
-            catch(UnauthorizedAccessException){File.Delete(temp);throw new IOException("нет доступа к «"+Path.GetFileName(path)+"».");}
-            return path;
+        public static List<PdfFile> Write(string workbook,DateTime asOf,PdfSettings settings) {
+            settings=settings??new PdfSettings();
+            var parts=settings.Combined?new[]{Tuple.Create(new[]{"СВОД","Итоги работы"},PathFor(workbook,asOf,settings.CombinedName,PdfSettings.CombinedDefault))}
+                :new[]{Tuple.Create(new[]{"СВОД"},PathFor(workbook,asOf,settings.SummaryName,PdfSettings.SummaryDefault)),Tuple.Create(new[]{"Итоги работы"},PathFor(workbook,asOf,settings.WorkName,PdfSettings.WorkDefault))};
+            if(parts.Length==2&&string.Equals(parts[0].Item2,parts[1].Item2,StringComparison.OrdinalIgnoreCase))
+                throw new IOException("у PDF «СВОД» и «Итогов работы» одинаковое имя «"+System.IO.Path.GetFileName(parts[0].Item2)+"»: задайте разные имена.");
+            var book=new PdfWorkbook(workbook);var size=PdfPapers.Size(settings.Paper);string day=asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture);
+            var files=new List<PdfFile>();
+            foreach(var part in parts){
+                var pdf=new PdfDocument("Свод проверки "+day);foreach(string sheet in part.Item1)book.Render(pdf,sheet,0,size[0],size[1]);
+                files.Add(new PdfFile{Requested=part.Item2,Path=Save(pdf.Save(),part.Item2)});
+            }
+            return files;
         }
+        // A file open in another program cannot be replaced: the PDF goes to the first free «имя (1).pdf», «имя (2).pdf»…
+        static string Save(byte[] data,string path) {
+            string folder=System.IO.Path.GetDirectoryName(path),stem=System.IO.Path.GetFileNameWithoutExtension(path);
+            for(int i=0;i<100;i++) {
+                string candidate=i==0?path:System.IO.Path.Combine(folder,stem+" ("+i+").pdf"),temp=candidate+".tmp";
+                try {File.WriteAllBytes(temp,data);}
+                catch(UnauthorizedAccessException){throw new IOException("нет доступа к папке «"+folder+"».");}
+                try {if(File.Exists(candidate))File.Delete(candidate);File.Move(temp,candidate);return candidate;}
+                catch(IOException){TryDelete(temp);}
+                catch(UnauthorizedAccessException){TryDelete(temp);}
+            }
+            throw new IOException("«"+System.IO.Path.GetFileName(path)+"» и файлы с индексами до 99 открыты или недоступны.");
+        }
+        static void TryDelete(string path){try{if(File.Exists(path))File.Delete(path);}catch(IOException){}catch(UnauthorizedAccessException){}}
     }
 
     sealed class PdfStyle {

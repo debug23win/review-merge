@@ -44,8 +44,8 @@ namespace ReviewMerge {
         public bool CurrentDateForNewReviews, MatchSurnames;
         public bool KeepLegacyColumns;
         public bool KeepLegacyReport;
-        // Paper of the PDF made after the build.
-        public PdfPaper PdfPaper;
+        // PDF made after the build: paper, separate files or one file, names.
+        public PdfSettings Pdf=new PdfSettings();
         // The volumes with remarks above «СВОД» are plain text; true frames each of them.
         public bool RemarksWithBorders;
         // A reviewer name from the files and a known person with the same surname; true treats them as one person.
@@ -62,6 +62,7 @@ namespace ReviewMerge {
         public string Output;
         // The two-page PDF of «СВОД» and «Итоги работы» next to the workbook, or why it was not made.
         public string Pdf, PdfError;
+        public readonly List<string> Pdfs = new List<string>();
         public readonly List<Conflict> Conflicts = new List<Conflict>();
         public readonly List<Problem> Problems = new List<Problem>();
         public readonly List<SourceRow> History = new List<SourceRow>();
@@ -359,7 +360,11 @@ namespace ReviewMerge {
                 } else {if(File.Exists(output))throw new IOException("Файл результата появился во время сборки. Повторите сборку.");File.Move(temp,output);}
                 result.Output=output;
                 if(!options.KeepLegacyReport) {
-                    try {result.Pdf=PdfReport.Write(output,asOf,options.PdfPaper);progress(99,"PDF: "+Path.GetFileName(result.Pdf));}
+                    try {
+                        foreach(var file in PdfReport.Write(output,asOf,options.Pdf)){result.Pdfs.Add(file.Path);
+                            progress(99,file.Path==file.Requested?"PDF: "+Path.GetFileName(file.Path):"PDF «"+Path.GetFileName(file.Requested)+"» открыт в другой программе, создан «"+Path.GetFileName(file.Path)+"»");}
+                        result.Pdf=result.Pdfs.FirstOrDefault();
+                    }
                     catch(Exception ex) {result.PdfError=ex.Message;progress(99,"PDF не создан: "+ex.Message);}
                 }
                 progress(100,"Готово: "+result.Documents+" документов, "+result.Conflicts.Count+" конфликтов, "+result.Problems.Count+" проблем данных");return result;
