@@ -128,7 +128,9 @@ namespace ReviewMerge {
         public readonly Dictionary<int, string> RowElKey = new Dictionary<int, string>();
         public readonly Dictionary<int, int> RowOrder = new Dictionary<int, int>();
         public readonly Dictionary<string, SortedSet<double>> Activity = new Dictionary<string, SortedSet<double>>(StringComparer.OrdinalIgnoreCase);
-        public static bool IsExpert(object who) { return XlsxReader.Normal(who) == Expert; }
+        // The Technical expert however written: «ТЭ», «Т.Э.», «тех. эксперт», «техн. эксперт», «технический эксперт».
+        static readonly Regex ExpertName = new Regex(@"^(?:Т\.?\s*Э\.?|ТЕХ(?:Н(?:ИЧ(?:ЕСКИЙ)?)?)?\.?\s*ЭКСП(?:ЕРТ)?\.?)$");
+        public static bool IsExpert(object who) { return ExpertName.IsMatch(XlsxReader.Normal(who).Replace('Ё', 'Е')); }
         public static bool Same(object a, object b) { return string.Equals(XlsxReader.Text(a), XlsxReader.Text(b), StringComparison.OrdinalIgnoreCase); }
     }
 
@@ -186,7 +188,8 @@ namespace ReviewMerge {
             var rows = new List<RdRow>(); string elkey = "", elname = "";
             int last = sheet.Rows.Keys.DefaultIfEmpty(0).Max();
             for (int r = layout.First; r <= last; r++) {
-                object[] values; if (!sheet.Rows.TryGetValue(r, out values)) values = new object[Width];
+                object[] values; // A copy: spellings unified by the merge must still differ from the sheet, so that the writer changes them.
+                if (!sheet.Rows.TryGetValue(r, out values)) values = new object[Width]; else values = (object[])values.Clone();
                 var row = new RdRow { File = sheet.Path, Row = r, Values = values, Layout = layout };
                 if (sheet.Date1904) foreach (string k in new[] { "date", "fixed" }) { int c = layout[k]; if (c > 0 && values[c - 1] is double && (double)values[c - 1] > 1000) values[c - 1] = (double)values[c - 1] + 1462; }
                 string el = Txt(row["el"]), rd = Txt(row["rd"]);
@@ -305,9 +308,9 @@ namespace ReviewMerge {
                 }
                 if (toOne) result.ConvertedMarks.Add("«" + shown + "» → 1 (ячеек: " + cells.Count + ")");
             }
-            foreach (var set in book.Sets) { Check(token); MergeSet(set, book.Layout, options, result, importDate); }
-            Place(book);
             book.Ved = ReadVed(sources[0]);
+            foreach (var set in book.Sets) { Check(token); MergeSet(set, book.Layout, book.Ved, options, result, importDate); }
+            Place(book);
             book.Acts = ReadActs(sources[0]);
             Evaluate(book, asOf);
             result.Rd = true; result.Documents = book.Sets.Count; result.Elements = book.Elements.Count;
@@ -317,7 +320,7 @@ namespace ReviewMerge {
             return book;
         }
         // The rules of the PD register for one set: every «1» is kept, different texts are joined, the reviewer and the date of the consolidated book stay.
-        static void MergeSet(RdSet set, RdLayout layout, MergeOptions options, MergeResult result, DateTime importDate) {
+        static void MergeSet(RdSet set, RdLayout layout, RdVed ved, MergeOptions options, MergeResult result, DateTime importDate) {
             var reviews = set.Reviews.Where(HasReview).ToList();
             var kept = set.TargetRow != null && HasReview(set.TargetRow) ? set.TargetRow : null;
             string document = Txt(set["rd"]) + (Txt(Revision(set["rev"])) != "" && Txt(Revision(set["rev"])) != "0" ? ", изм. " + Txt(set["rev"]) : "");
@@ -331,7 +334,14 @@ namespace ReviewMerge {
                 if (Txt(kept["date"]) != "") { double? d = XlsxReader.DateSerial(kept["date"]); set["date"] = d.HasValue ? (object)d.Value : kept["date"]; }
                 else { var same = Latest(named.Where(r => r != kept && Rules.NameKey(Txt(r["who"])) == Rules.NameKey(Txt(kept["who"])))); double? d = same == null ? null : XlsxReader.DateSerial(same["date"]); set["date"] = same == null ? null : d.HasValue ? (object)d.Value : same["date"]; }
             }
-            if (options.CurrentDateForNewReviews && Txt(set["who"]) != "") {
+            // A check of the Technical expert is dated by the letter of ТЭ («Дата» of the expert in «Ведомость», column K) when its row has no date.
+            bool expert = RdBook.IsExpert(set["who"]);
+            if (expert && !XlsxReader.DateSerial(set["date"]).HasValue) {
+                int vr; double? letter = ved.CodeRow.TryGetValue(Txt(set["rd"]), out vr) ? XlsxReader.DateSerial(ved.At(vr, 11)) : null;
+                if (letter.HasValue) { set["date"] = letter.Value; result.ExpertDates++; }
+                else AddProblem(result, reviews[reviews.Count - 1], "Проверил ТЭ, но в «Ведомости» нет даты письма ТЭ (столбец K): дата проверки не заполнена.");
+            }
+            if (options.CurrentDateForNewReviews && Txt(set["who"]) != "" && !expert) {
                 double? saved = kept != null && Txt(kept["who"]) != "" ? XlsxReader.DateSerial(kept["date"]) : null;
                 if (saved.HasValue) set["date"] = saved.Value; else { set["date"] = importDate.Date.ToOADate(); result.DatesAssignedToday++; }
             }
@@ -443,26 +453,28 @@ namespace ReviewMerge {
                     e.Name = first == null ? "" : (object)(first.IsNew ? first["elname"] : book.Target.At(first.SheetRow, layout["elname"])) ?? 0.0; e.Dgp = ""; e.ActVe = ""; e.Vpr = "";
                 }
                 e.Presented = e.Live.Count(s => s.Ve == "да"); e.Missing = Math.Max(0, e.InVe - e.Presented); e.NotInVe = e.Live.Count(s => s.Ve != "да");
-                e.Checked = e.Live.Count(s => s.Ve == "да" && s.Status != "не проверен" && !s.Expert);
+                e.Checked = e.Live.Count(s => s.Ve == "да" && s.Status != "не проверен");
                 e.Remarks = e.Live.Count(s => s.Status == "замечания"); e.NotAgreed = e.Live.Count(s => s.Status == "не согласован ТЭ"); e.Ready = e.Live.Count(s => s.Status == "готово к ВПР");
                 e.Status = e.Missing == 0 && e.NotInVe == 0 && e.Ready == e.InVe ? "готов к ВПР" : e.Missing > 0 ? "неполный комплект" : e.NotInVe > 0 ? "расхождение с ВЭ РД" : e.Remarks > 0 ? "замечания" : e.NotAgreed > 0 ? "не согласован ТЭ" : "в проверке";
                 string act; e.Act = book.Acts.ElementStatus.TryGetValue(key, out act) ? act : "не поступал";
                 e.Expert = e.Live.Count(s => s.Expert);
-                // An element is checked on the day of its last current set when every current set has a date and none is a remark of ТЭ.
-                if (e.Live.All(s => s.Date.HasValue) && e.Expert == 0) {
+                // An element is checked on the day of its last current set when every current set has a date; ТЭ is a reviewer like the others.
+                if (e.Live.All(s => s.Date.HasValue && s.Who != "")) {
                     e.Date = e.Live.Count == 0 ? 0 : e.Live.Max(s => s.Date.Value);
                     var by = e.Live.LastOrDefault(s => s.Date == e.Date); e.Who = by == null ? "" : by.Who;
                 } else e.Who = "";
                 book.Elements.Add(e);
             }
-            // Reviewers of the reports: everyone with a dated check of a set or an act, except ТЭ; the days: working days from the first check, check days and the report date.
-            var team = book.Sets.Where(s => s.Who != "" && !s.Expert && s.Date.HasValue).ToList();
-            foreach (var s in team) Activity(book, s.Who).Add(s.Date.Value);
-            foreach (var c in book.Acts.Checks.Where(c => !RdBook.IsExpert(c.Item1))) Activity(book, c.Item1).Add(c.Item2);
-            book.People.AddRange(book.Activity.Keys.OrderBy(v => v, StringComparer.CurrentCulture));
+            // Reviewers of the reports: everyone with a dated check of a set or an act, ТЭ after the people; the days: working days from the first check, check days and the report date.
+            var team = book.Sets.Where(s => s.Who != "" && s.Date.HasValue).ToList();
+            foreach (var s in team) Activity(book, s.Expert ? RdBook.Expert : s.Who).Add(s.Date.Value);
+            foreach (var c in book.Acts.Checks) Activity(book, RdBook.IsExpert(c.Item1) ? RdBook.Expert : c.Item1).Add(c.Item2);
+            book.People.AddRange(book.Activity.Keys.OrderBy(v => RdBook.IsExpert(v) ? 1 : 0).ThenBy(v => v, StringComparer.CurrentCulture));
             double report = asOf.Date.ToOADate();
             var dates = team.Select(s => s.Date.Value).Where(d => d <= report).ToList();
-            double start = dates.Count == 0 ? report : dates.Min();
+            // Working days run from the first check of the people; the letters of ТЭ, often months earlier, add only their own days.
+            var own = team.Where(s => !s.Expert && s.Date.Value <= report).Select(s => s.Date.Value).ToList();
+            double start = own.Count > 0 ? own.Min() : dates.Count == 0 ? report : dates.Max();
             if (report - start > 730) throw new InvalidDataException("Период проверки больше двух лет. Проверьте даты в столбце «Дата проверки».");
             var days = new SortedSet<double>(dates) { report };
             for (double d = start; d <= report; d++) { var day = DateTime.FromOADate(d).DayOfWeek; if (day != DayOfWeek.Saturday && day != DayOfWeek.Sunday) days.Add(d); }
@@ -484,6 +496,7 @@ namespace ReviewMerge {
             var result = new MergeResult { Files = sources.Count - 1 };
             var book = Collect(sources, mainName, asOf, progress, token, options, result, DateTime.Today);
             if (options.CurrentDateForNewReviews) progress(42, "Текущая дата назначена новым проверкам: " + result.DatesAssignedToday + ". Даты уже внесённых проверок сохранены.");
+            if (result.ExpertDates > 0) progress(43, "Проверкам ТЭ без даты подставлена дата письма ТЭ из «Ведомости»: " + result.ExpertDates + ".");
             string temp = Path.Combine(Path.GetDirectoryName(output), "~merge-" + Guid.NewGuid().ToString("N") + ".xlsx");
             try {
                 Check(token); progress(45, "Запись комплектов и формул");
