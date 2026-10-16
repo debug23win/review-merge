@@ -39,6 +39,15 @@ namespace ReviewMerge {
         public RegisterColumns Columns;
         public readonly List<SourceRow> Rows = new List<SourceRow>();
         public readonly List<SourceRow> Orphans = new List<SourceRow>();
+        // The row of column numbers (1, 2, 3 …) found among the data, e.g. moved there by a sort in Excel: not a document.
+        public readonly List<int> NumberRows = new List<int>();
+    }
+    // Cell values of a sheet by row number; Values[0] is column A.
+    public sealed class RawSheet {
+        public string Path;
+        public bool Date1904;
+        public readonly SortedDictionary<int, object[]> Rows = new SortedDictionary<int, object[]>();
+        public object At(int row, int col) { object[] v; return col >= 1 && Rows.TryGetValue(row, out v) && col <= v.Length ? v[col - 1] : null; }
     }
     public static class XlsxReader {
         static readonly XNamespace Ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -109,30 +118,59 @@ namespace ReviewMerge {
             foreach (char ch in address) { if (ch < 'A' || ch > 'Z') break; result = result * 26 + ch - 'A' + 1; }
             return result;
         }
+        // The worksheet of a sheet name (null when the book has no such sheet), the shared strings and the date system of the book.
+        static XDocument SheetXml(ZipArchive zip, string sheetName, out List<string> strings, out bool date1904) {
+            var workbook = Load(zip, "xl/workbook.xml");
+            strings = new List<string>();
+            date1904 = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904") == "1";
+            var sheet = workbook.Descendants(Ns + "sheet").FirstOrDefault(s =>
+                string.Equals(((string)s.Attribute("name") ?? "").Trim(), sheetName.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (sheet == null) return null;
+            var rels = Load(zip, "xl/_rels/workbook.xml.rels");
+            string id = (string)sheet.Attribute(Rel + "id");
+            var relationship = rels.Root.Elements().FirstOrDefault(e => (string)e.Attribute("Id") == id);
+            if (relationship == null) throw new InvalidDataException("Не удалось найти основной лист Excel.");
+            string target = ((string)relationship.Attribute("Target")).Replace('\\', '/');
+            target = target.StartsWith("/") ? target.TrimStart('/') : "xl/" + target;
+            if (target.Contains("../")) throw new InvalidDataException("Неподдерживаемая ссылка на лист Excel.");
+            if (zip.GetEntry("xl/sharedStrings.xml") != null)
+                strings.AddRange(Load(zip, "xl/sharedStrings.xml").Root.Elements(Ns + "si")
+                    .Select(e => string.Concat(e.Descendants(Ns + "t").Select(t => t.Value))));
+            var data = Load(zip, target);
+            Rules.NumberCells(data);
+            return data;
+        }
+        // Values of the first width columns of every row of a sheet, as SourceRow reads them; null when there is no such sheet.
+        public static RawSheet ReadSheet(string path, string sheetName, int width) {
+            if (!string.Equals(System.IO.Path.GetExtension(path), ".xlsx", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Поддерживаются файлы .xlsx: " + System.IO.Path.GetFileName(path));
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
+                List<string> strings; bool date1904;
+                var data = SheetXml(zip, sheetName, out strings, out date1904);
+                if (data == null) return null;
+                var result = new RawSheet { Path = path, Date1904 = date1904 };
+                foreach (var xmlRow in data.Descendants(Ns + "sheetData").Elements(Ns + "row")) {
+                    int rn; if (!int.TryParse((string)xmlRow.Attribute("r"), out rn)) continue;
+                    var values = new object[width];
+                    foreach (var cell in xmlRow.Elements(Ns + "c")) {
+                        int col = Column((string)cell.Attribute("r") ?? "");
+                        if (col >= 1 && col <= width) values[col - 1] = RawValue(cell, strings);
+                    }
+                    result.Rows[rn] = values;
+                }
+                return result;
+            }
+        }
         public static SourceBook Read(string path, string sheetName) {
             if (!string.Equals(System.IO.Path.GetExtension(path), ".xlsx", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Поддерживаются файлы .xlsx: " + System.IO.Path.GetFileName(path));
             var result = new SourceBook { Path = path };
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
-                var workbook = Load(zip, "xl/workbook.xml");
-                var sheet = workbook.Descendants(Ns + "sheet").FirstOrDefault(s =>
-                    string.Equals(((string)s.Attribute("name") ?? "").Trim(), sheetName.Trim(), StringComparison.OrdinalIgnoreCase));
-                if (sheet == null) throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": нет листа «" + sheetName + "».");
-                var rels = Load(zip, "xl/_rels/workbook.xml.rels");
-                string id = (string)sheet.Attribute(Rel + "id");
-                var relationship = rels.Root.Elements().FirstOrDefault(e => (string)e.Attribute("Id") == id);
-                if (relationship == null) throw new InvalidDataException("Не удалось найти основной лист Excel.");
-                string target = ((string)relationship.Attribute("Target")).Replace('\\', '/');
-                target = target.StartsWith("/") ? target.TrimStart('/') : "xl/" + target;
-                if (target.Contains("../")) throw new InvalidDataException("Неподдерживаемая ссылка на лист Excel.");
-                var strings = new List<string>();
-                if (zip.GetEntry("xl/sharedStrings.xml") != null)
-                    strings.AddRange(Load(zip, "xl/sharedStrings.xml").Root.Elements(Ns + "si")
-                        .Select(e => string.Concat(e.Descendants(Ns + "t").Select(t => t.Value))));
-                bool date1904 = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904") == "1";
-                var data = Load(zip, target);
-                Rules.NumberCells(data);
+                List<string> strings; bool date1904;
+                var data = SheetXml(zip, sheetName, out strings, out date1904);
+                if (data == null) throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": нет листа «" + sheetName + "».");
                 var all = new List<SourceRow>();
                 foreach (var xmlRow in data.Descendants(Ns + "sheetData").Elements(Ns + "row")) {
                     int rn;
@@ -180,6 +218,7 @@ namespace ReviewMerge {
                     result.DataStart++;
                 foreach (var row in all.Where(r => r.Row >= result.DataStart)) {
                     row.IsConsolidated = knownFirstDate;
+                    if (Enumerable.Range(0, 9).All(i => Text(row.Values[i]) == (i + 1).ToString(Inv))) { result.NumberRows.Add(row.Row); continue; }
                     if (Text(row.Values[2]) != "") result.Rows.Add(row);
                     else if (row.Values.Skip(8).Any(v => Text(v) != "")) result.Orphans.Add(row);
                 }

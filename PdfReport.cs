@@ -34,6 +34,9 @@ namespace ReviewMerge {
         public PdfPaper Paper;
         public bool Combined;
         public string SummaryName=SummaryDefault,WorkName=WorkDefault,CombinedName=CombinedDefault;
+        // The sheet of the second table: «Итоги работы» of PD, «Итоги проверки» of the working documentation.
+        public string WorkSheet=PdWork;
+        public const string PdWork="Итоги работы";
     }
     // A written PDF; Path differs from Requested when the requested file was open in another program.
     public sealed class PdfFile { public string Path,Requested; }
@@ -52,11 +55,15 @@ namespace ReviewMerge {
         }
         public static List<PdfFile> Write(string workbook,DateTime asOf,PdfSettings settings) {
             settings=settings??new PdfSettings();
-            var parts=settings.Combined?new[]{Tuple.Create(new[]{"СВОД","Итоги работы"},PathFor(workbook,asOf,settings.CombinedName,PdfSettings.CombinedDefault))}
-                :new[]{Tuple.Create(new[]{"СВОД"},PathFor(workbook,asOf,settings.SummaryName,PdfSettings.SummaryDefault)),Tuple.Create(new[]{"Итоги работы"},PathFor(workbook,asOf,settings.WorkName,PdfSettings.WorkDefault))};
+            var book=new PdfWorkbook(workbook);
+            // A book of the working documentation has «Итоги проверки» in place of «Итоги работы» (also for --pdf).
+            string work=settings.WorkSheet??PdfSettings.PdWork;if(!book.Has(work)&&book.Has(RdEngine.RdWork))work=RdEngine.RdWork;
+            string workDefault=work==PdfSettings.PdWork?PdfSettings.WorkDefault:"{книга} "+work+" {дата}",workName=settings.WorkName==PdfSettings.WorkDefault?workDefault:settings.WorkName;
+            var parts=settings.Combined?new[]{Tuple.Create(new[]{"СВОД",work},PathFor(workbook,asOf,settings.CombinedName,PdfSettings.CombinedDefault))}
+                :new[]{Tuple.Create(new[]{"СВОД"},PathFor(workbook,asOf,settings.SummaryName,PdfSettings.SummaryDefault)),Tuple.Create(new[]{work},PathFor(workbook,asOf,workName,workDefault))};
             if(parts.Length==2&&string.Equals(parts[0].Item2,parts[1].Item2,StringComparison.OrdinalIgnoreCase))
-                throw new IOException("у PDF «СВОД» и «Итогов работы» одинаковое имя «"+System.IO.Path.GetFileName(parts[0].Item2)+"»: задайте разные имена.");
-            var book=new PdfWorkbook(workbook);var size=PdfPapers.Size(settings.Paper);string day=asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture);
+                throw new IOException("у PDF «СВОД» и «"+work+"» одинаковое имя «"+System.IO.Path.GetFileName(parts[0].Item2)+"»: задайте разные имена.");
+            var size=PdfPapers.Size(settings.Paper);string day=asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture);
             var files=new List<PdfFile>();
             foreach(var part in parts){
                 var pdf=new PdfDocument("Свод проверки "+day);foreach(string sheet in part.Item1)book.Render(pdf,sheet,0,size[0],size[1]);
@@ -109,6 +116,7 @@ namespace ReviewMerge {
             ReadStyles();
         }
         XDocument Load(string part){using(var m=new MemoryStream(parts[part]))return XDocument.Load(m);}
+        public bool Has(string sheet){return sheets.Any(s=>string.Equals(s.Item1,sheet,StringComparison.OrdinalIgnoreCase));}
         static string Rgb(XElement color,string fallback){var rgb=color==null?null:(string)color.Attribute("rgb");return string.IsNullOrEmpty(rgb)?fallback:rgb.Length==6?"FF"+rgb:rgb;}
         void ReadStyles() {
             if(!parts.ContainsKey("xl/styles.xml")){styles.Add(new PdfStyle());return;}

@@ -25,17 +25,18 @@ namespace ReviewMerge {
                 }
                 if (args.Length > 0 && args[0] == "--batch") {
                     // Options of the batch mode answer every question with "yes": --match-surnames merges people with one surname, --fill-incomplete fills the remaining rows of partly checked boxes.
-                    string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns","--keep-legacy-report","--remarks-with-borders","--remarks-without-borders","--recalculate-history"};
-                    var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1]),KeepLegacyColumns=args.Contains(switches[4]),KeepLegacyReport=args.Contains(switches[5]),RemarksWithBorders=args.Contains(switches[6]),RecalculateHistory=args.Contains(switches[8])};
+                    string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns","--keep-legacy-report","--remarks-with-borders","--remarks-without-borders","--recalculate-history","--rd"};
+                    var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1]),KeepLegacyColumns=args.Contains(switches[4]),KeepLegacyReport=args.Contains(switches[5]),RemarksWithBorders=args.Contains(switches[6]),RecalculateHistory=args.Contains(switches[8]),Rd=args.Contains(switches[9])};
                     if(args.Contains(switches[2]))options.FillIncomplete=list=>list;
                     if(args.Contains(switches[3]))options.ConvertMark=(mark,count)=>true;
                     options.Pdf=PdfSwitches(ref args);
                     args=args.Where(a=>!switches.Contains(a)).ToArray();
-                    if (args.Length < 5) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--current-date-for-new] [--match-surnames] [--fill-incomplete] [--convert-marks] [--remarks-with-borders] [--recalculate-history] [--pdf-paper=A4|A4-landscape|A3|A3-landscape] [--pdf-combined] [--pdf-name=…] [--pdf-name-summary=…] [--pdf-name-work=…]");
+                    // Working documentation (--rd) may be built from the consolidated book alone: the reports are calculated again.
+                    if (args.Length < (options.Rd ? 4 : 5)) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--rd] [--current-date-for-new] [--match-surnames] [--fill-incomplete] [--convert-marks] [--remarks-with-borders] [--recalculate-history] [--pdf-paper=A4|A4-landscape|A3|A3-landscape] [--pdf-combined] [--pdf-name=…] [--pdf-name-summary=…] [--pdf-name-work=…]");
                     DateTime date = DateTime.ParseExact(args[2], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
                     var logs = new List<string>();
                     var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
-                    var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.DatesAssignedToday, result.FilledRows, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count,
+                    var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.Elements, result.Rd, result.DatesAssignedToday, result.FilledRows, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count, ProblemList=result.Problems.Select(p=>Path.GetFileName(p.File)+", строка "+p.Row+": "+p.Detail).ToList(), ConflictList=result.Conflicts.Select(c=>c.Document+" | "+c.Field+" | "+c.Details.Replace("\n"," / ")).ToList(),
                         IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.VolumeMerges, result.Output, result.Pdf, result.Pdfs, result.PdfError, Log=logs };
                     File.WriteAllText(args[1]+".run.json", new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
                     return 0;
@@ -81,6 +82,9 @@ namespace ReviewMerge {
         readonly TextBox summaryName = new TextBox(), workName = new TextBox(), combinedName = new TextBox();
         readonly Label firstName = new Label(), secondName = new Label();
         readonly CheckBox currentDate = new CheckBox(), matchSurnames = new CheckBox(), framedRemarks = new CheckBox();
+        // ПД — volumes and boxes of the PD register; РД — sets and elements of the RD check sheet. The choice is kept between runs.
+        readonly RadioButton pdMode = new RadioButton(), rdMode = new RadioButton();
+        readonly Label subtitle = new Label();
         readonly LinkLabel forgetNames = new LinkLabel();
         readonly RichTextBox log = new RichTextBox();
         readonly ProgressBar progress = new ProgressBar();
@@ -100,7 +104,7 @@ namespace ReviewMerge {
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,43));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,50));
             Controls.Add(layout);
             var titleBar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};titleBar.Controls.Add(new Label {Text="Свод проверки документации",Font=new Font("Segoe UI",19,FontStyle.Bold),AutoSize=true,ForeColor=Color.FromArgb(28,46,65)});titleBar.Controls.Add(DesktopUpdates.Updates.Attach(this,()=>running));layout.Controls.Add(titleBar,0,0);
-            layout.Controls.Add(new Label {Text="Объединение отметок и замечаний. Статистика рассчитывается формулами из основного листа.",AutoSize=true,ForeColor=Color.FromArgb(73,91,108)},0,1);
+            subtitle.AutoSize=true;subtitle.ForeColor=Color.FromArgb(73,91,108);layout.Controls.Add(subtitle,0,1);
             tabs.Dock=DockStyle.Fill;layout.Controls.Add(tabs,0,2);
             var page=new TabPage("Сборка свода") {Padding=new Padding(14),BackColor=Color.White};tabs.TabPages.Add(page);
             var content=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=10};
@@ -113,7 +117,11 @@ namespace ReviewMerge {
             buttons.Controls.Add(EditButton("Добавить папку",135,(s,e)=>ChooseFolder()));
             buttons.Controls.Add(EditButton("Удалить",90,(s,e)=>RemoveSelected()));
             buttons.Controls.Add(EditButton("Выше",74,(s,e)=>MoveSelected(-1)));
-            buttons.Controls.Add(EditButton("Ниже",74,(s,e)=>MoveSelected(1)));content.Controls.Add(buttons,0,0);
+            buttons.Controls.Add(EditButton("Ниже",74,(s,e)=>MoveSelected(1)));
+            buttons.Controls.Add(new Label {Text="Документация:",AutoSize=true,Margin=new Padding(36,8,6,0)});
+            pdMode.Text="ПД (тома)";rdMode.Text="РД (комплекты)";
+            foreach(var mode in new[]{pdMode,rdMode}){mode.AutoSize=true;mode.Margin=new Padding(4,6,8,0);buttons.Controls.Add(mode);}
+            content.Controls.Add(buttons,0,0);
             files.Dock=DockStyle.Fill;files.View=View.Details;files.FullRowSelect=true;files.MultiSelect=true;files.HideSelection=false;
             files.Columns.Add("№",38);files.Columns.Add("Файл",265);files.Columns.Add("Папка",630);content.Controls.Add(files,0,1);
             var parameters=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=6};parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,125));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));parameters.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,150));
@@ -146,16 +154,17 @@ namespace ReviewMerge {
             var names=new Panel {Height=26,Anchor=AnchorStyles.Left|AnchorStyles.Right,Margin=new Padding(3,3,3,0)};
             var hint=new ToolTip();
             foreach(var item in new[]{Tuple.Create(summaryName,"PdfSummaryName",PdfSettings.SummaryDefault),Tuple.Create(workName,"PdfWorkName",PdfSettings.WorkDefault),Tuple.Create(combinedName,"PdfCombinedName",PdfSettings.CombinedDefault)}) {
-                var box=item.Item1;string key=item.Item2;box.Text=UserSettings.GetText(key)??item.Item3;box.Dock=DockStyle.Fill;
-                box.TextChanged+=(s,e)=>{try{UserSettings.SetText(key,box.Text);}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}};
+                var box=item.Item1;string key=item.Item2;box.Dock=DockStyle.Fill;
+                // The names of РД are kept apart from those of ПД («Rd» before the key).
+                box.TextChanged+=(s,e)=>{if(switching)return;try{UserSettings.SetText((rdMode.Checked?"Rd":"")+key,box.Text);}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}};
                 hint.SetToolTip(box,"Имя PDF без «.pdf». {книга} — имя сводного документа, {дата} — дата свода. Если файл открыт в другой программе, создаётся «имя (1).pdf».");
             }
             names.Controls.Add(summaryName);names.Controls.Add(combinedName);
             pdfRow.Controls.Add(firstName,2,0);pdfRow.Controls.Add(names,3,0);pdfRow.Controls.Add(secondName,4,0);pdfRow.Controls.Add(workName,5,0);
-            pdfMode.SelectedIndexChanged+=(s,e)=>{ShowPdfNames();SaveFlag("PdfCombined",pdfMode.SelectedIndex==1);};ShowPdfNames();content.Controls.Add(pdfRow,0,6);
+            pdfMode.SelectedIndexChanged+=(s,e)=>{ShowPdfNames();SaveFlag("PdfCombined",pdfMode.SelectedIndex==1);};content.Controls.Add(pdfRow,0,6);
             progress.Dock=DockStyle.Fill;progress.Maximum=100;progress.Margin=new Padding(0,3,0,6);content.Controls.Add(progress,0,7);
             log.Dock=DockStyle.Fill;log.ReadOnly=true;log.BackColor=Color.FromArgb(248,250,252);log.BorderStyle=BorderStyle.FixedSingle;log.Font=new Font("Segoe UI",9);
-            log.Text="Добавьте файлы проверяющих и выберите существующий сводный документ.\nЕго строки и оформление сохраняются; новые документы добавляются в конец. Перед записью создаётся резервная копия. Закройте документ в Excel на время сборки.";content.Controls.Add(log,0,8);
+            content.Controls.Add(log,0,8);
             totals.Dock=DockStyle.Fill;totals.Text="Файлы не выбраны";totals.ForeColor=Color.FromArgb(28,46,65);content.Controls.Add(totals,0,9);
             var conflictPage=new TabPage("Конфликты") {Padding=new Padding(12),BackColor=Color.White};tabs.TabPages.Add(conflictPage);
             conflicts.Dock=DockStyle.Fill;conflicts.ReadOnly=true;conflicts.AllowUserToAddRows=false;conflicts.AllowUserToDeleteRows=false;conflicts.AutoGenerateColumns=false;conflicts.BackgroundColor=Color.White;conflicts.RowHeadersVisible=false;conflicts.AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.DisplayedCells;
@@ -172,6 +181,27 @@ namespace ReviewMerge {
             DragEnter+=(s,e)=> { if(!running && e.Data.GetDataPresent(DataFormats.FileDrop)) e.Effect=DragDropEffects.Copy; };
             DragDrop+=(s,e)=> { if(running)return;foreach(string path in (string[])e.Data.GetData(DataFormats.FileDrop)) AddPath(path); };
             FormClosing+=(s,e)=> { if(running) {e.Cancel=true;CancelBuild();Append("Отмена запрошена. Дождитесь завершения текущей операции.");} };
+            (UserSettings.GetText("Mode")=="РД"?rdMode:pdMode).Checked=true;ApplyMode();
+            foreach(var mode in new[]{pdMode,rdMode})mode.CheckedChanged+=(s,e)=>{if(!((RadioButton)s).Checked)return;try{UserSettings.SetText("Mode",rdMode.Checked?"РД":"ПД");}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}ApplyMode();};
+        }
+        const string PdSheet="Все загруженные файлы",RdSheet="Проверка комплектов";
+        const string PdIntro="Добавьте файлы проверяющих и выберите существующий сводный документ.\nЕго строки и оформление сохраняются; новые документы добавляются в конец. Перед записью создаётся резервная копия. Закройте документ в Excel на время сборки.";
+        const string RdIntro="Добавьте файлы проверяющих (форма проверки РД) и выберите сводную книгу РД — форму с листами «"+RdSheet+"» и «Ведомость».\nКомплекты сопоставляются по шифру РД и номеру изменения; новые добавляются в конец листа. Перед записью создаётся резервная копия. Закройте книгу в Excel на время сборки.";
+        bool switching;
+        // The mode changes the main sheet, the PDF names and labels; options of PD volumes are not used for RD.
+        void ApplyMode() {
+            bool rd=rdMode.Checked;switching=true;
+            try {
+                if(sheetName.Text.Trim()==""||sheetName.Text==(rd?PdSheet:RdSheet))sheetName.Text=rd?RdSheet:PdSheet;
+                var names=new[]{Tuple.Create(summaryName,"PdfSummaryName",PdfSettings.SummaryDefault),Tuple.Create(workName,"PdfWorkName",rd?"{книга} "+RdEngine.RdWork+" {дата}":PdfSettings.WorkDefault),Tuple.Create(combinedName,"PdfCombinedName",PdfSettings.CombinedDefault)};
+                foreach(var item in names)item.Item1.Text=UserSettings.GetText((rd?"Rd":"")+item.Item2)??item.Item3;
+            } finally {switching=false;}
+            framedRemarks.Visible=!rd;matchSurnames.Enabled=!rd;
+            subtitle.Text=rd?"Рабочая документация: объединение проверок комплектов. Отчёты рассчитываются формулами из листа «"+RdSheet+"».":"Объединение отметок и замечаний. Статистика рассчитывается формулами из основного листа.";
+            currentDate.Text=rd?"Ставить текущую дату новым проверенным комплектам":"Ставить текущую дату новым проверенным томам";
+            // The hint changes with the mode until the first message of a build is written.
+            if(log.Text==""||log.Text==PdIntro||log.Text==RdIntro)log.Text=rd?RdIntro:PdIntro;
+            ShowPdfNames();UpdateRule();
         }
         Button EditButton(string text,int width,EventHandler handler) {
             var b=new Button {Text=text,Width=width,Height=31,FlatStyle=FlatStyle.Standard};b.Click+=handler;editingButtons.Add(b);return b;
@@ -199,7 +229,7 @@ namespace ReviewMerge {
         void Ui(Action action) {if(!IsDisposed && IsHandleCreated)BeginInvoke(action);}
         void Busy(bool value) {
             running=value;build.Enabled=!value;recalculate.Enabled=!value;cancel.Enabled=value;open.Enabled=!value && lastOutput!=null;
-            foreach(var b in editingButtons)b.Enabled=!value;sheetName.Enabled=!value;output.Enabled=!value;asOf.Enabled=!value;paper.Enabled=!value;files.Enabled=!value;currentDate.Enabled=!value;matchSurnames.Enabled=!value;framedRemarks.Enabled=!value;pdfMode.Enabled=!value;summaryName.Enabled=!value;workName.Enabled=!value;combinedName.Enabled=!value;forgetNames.Enabled=!value;
+            foreach(var b in editingButtons)b.Enabled=!value;sheetName.Enabled=!value;output.Enabled=!value;asOf.Enabled=!value;paper.Enabled=!value;files.Enabled=!value;currentDate.Enabled=!value;matchSurnames.Enabled=!value;framedRemarks.Enabled=!value;pdfMode.Enabled=!value;summaryName.Enabled=!value;workName.Enabled=!value;combinedName.Enabled=!value;forgetNames.Enabled=!value;pdMode.Enabled=!value;rdMode.Enabled=!value;if(!value)matchSurnames.Enabled=!rdMode.Checked;
         }
         void StartBuild(bool history) {
             if(!history&&paths.Count==0) {MessageBox.Show(this,"Добавьте файлы проверяющих.",Text,MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
@@ -207,14 +237,16 @@ namespace ReviewMerge {
             string destination;
             try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
-            if(history&&MessageBox.Show(this,"Пересчитать статистику всех дней по текущим правилам (номера томов, фрагменты, ИУЛ) по данным сводного документа?\n\nЧисла прошлых дней в «СВОД», статистике и «Итогах работы» будут рассчитаны заново и могут измениться. Файлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+            bool rd=rdMode.Checked;
+            if(history&&MessageBox.Show(this,rd?"Пересчитать «СВОД», «Итоги проверки», «Статистику» и «Элементы» по данным сводной книги РД?\n\nФайлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.":"Пересчитать статистику всех дней по текущим правилам (номера томов, фрагменты, ИУЛ) по данным сводного документа?\n\nЧисла прошлых дней в «СВОД», статистике и «Итогах работы» будут рассчитаны заново и могут измениться. Файлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             var selected=history?new List<string>():paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
-            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark,Pdf=new PdfSettings{Paper=(PdfPaper)paper.SelectedIndex,Combined=pdfMode.SelectedIndex==1,SummaryName=summaryName.Text,WorkName=workName.Text,CombinedName=combinedName.Text},RemarksWithBorders=framedRemarks.Checked,RecalculateHistory=history};
-            cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append(history?"Пересчёт статистики всех дней по сводному документу.":"Начата сборка "+selected.Count+" файлов.");
+            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark,Pdf=new PdfSettings{Paper=(PdfPaper)paper.SelectedIndex,Combined=pdfMode.SelectedIndex==1,SummaryName=summaryName.Text,WorkName=workName.Text,CombinedName=combinedName.Text,WorkSheet=rd?RdEngine.RdWork:PdfSettings.PdWork},RemarksWithBorders=framedRemarks.Checked,RecalculateHistory=history,Rd=rd};
+            cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append(history?(rd?"Пересчёт отчётов по сводной книге РД.":"Пересчёт статистики всех дней по сводному документу."):"Начата сборка "+selected.Count+" файлов"+(rd?" (РД).":"."));
             var worker=new Thread(()=> {
                 try {
                     var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token,options);
-                    Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text="Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Коробов проверено не полностью: "+result.IncompleteBoxes.Count+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
+                    Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text=result.Rd?"Комплектов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Элементов: "+result.Elements+", проверено: "+result.Boxes+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count
+                            :"Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Коробов проверено не полностью: "+result.IncompleteBoxes.Count+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
                         Append("Дополнен сводный документ: "+result.Output);foreach(string pdf in result.Pdfs)Append("Создан PDF: "+pdf);if(result.PdfError!=null)Append("PDF не создан: "+result.PdfError);foreach(var merge in result.VolumeMerges)Append("Один том по номеру тома "+merge);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
                         foreach(var v in result.FilledBoxes)Append("Заполнены без замечаний остальные строки. "+v);foreach(var v in result.IncompleteBoxes)Append("Проверено не полностью, неотмеченные тома не входят в статистику. "+v);
                         foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
@@ -223,7 +255,7 @@ namespace ReviewMerge {
             });worker.SetApartmentState(ApartmentState.STA);worker.IsBackground=true;worker.Start();
         }
         // Two files show both names; one file shows its own name.
-        void ShowPdfNames(){bool one=pdfMode.SelectedIndex==1;firstName.Text=one?"Имя файла:":"СВОД:";secondName.Text="Итоги работы:";summaryName.Visible=!one;combinedName.Visible=one;secondName.Visible=!one;workName.Visible=!one;}
+        void ShowPdfNames(){bool one=pdfMode.SelectedIndex==1;firstName.Text=one?"Имя файла:":"СВОД:";secondName.Text=(rdMode.Checked?RdEngine.RdWork:PdfSettings.PdWork)+":";summaryName.Visible=!one;combinedName.Visible=one;secondName.Visible=!one;workName.Visible=!one;}
         static PdfPaper SavedPaper(){try{string key=UserSettings.GetText("PdfPaper");return key==null?PdfPaper.A4Portrait:PdfPapers.Parse(key);}catch(ArgumentException){return PdfPaper.A4Portrait;}}
         void SaveFlag(string name,bool value){try{UserSettings.SetFlag(name,value);}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}}
         void RefreshForget(){int n=UserSettings.AnswerCount();forgetNames.Text=n==0?"":"Забыть сохранённые ответы ("+n+")";forgetNames.Visible=n>0;}
@@ -254,7 +286,7 @@ namespace ReviewMerge {
             if(cancel)throw new OperationCanceledException();
             return chosen;
         }
-        void UpdateRule(){rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний.\n"+(currentDate.Checked?"Новые проверки — с текущей датой; даты уже внесённых проверок сохраняются.":"Проверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.")+"\nДанные дописываются в выбранный сводный документ. Статистика — на вкладке «Свод».";}
+        void UpdateRule(){rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний"+(rdMode.Checked?"; комплект — шифр РД и «Изм.».\n":".\n")+(currentDate.Checked?"Новые проверки — с текущей датой; даты уже внесённых проверок сохраняются.":"Проверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.")+"\nДанные дописываются в выбранный сводный документ. Статистика — на вкладке «"+(rdMode.Checked?"СВОД":"Свод")+"».";}
         void CancelBuild() {if(cancellation!=null) {cancellation.Cancel();cancel.Enabled=false;Append("Запрошена отмена.");}}
     }
     sealed class IncompleteBoxesDialog : Form {

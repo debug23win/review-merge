@@ -278,6 +278,12 @@ namespace ReviewMerge {
             if(notes.Count>0)SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+mr});
             // Non-zero boxes and volumes of the first table are bold; the rules keep it so when Excel recalculates.
             Freeze("Итоги работы",work,past,asOf,(key,style,v)=>key.StartsWith("m|",StringComparison.Ordinal)?ReportStyle(style,bold:v!=0):style);
+            // Past days keep the numbers of earlier builds while «Всего» is calculated from the data: the log says when they no longer add up.
+            {Func<int,int,double> number=(r,c)=>{SortedDictionary<int,XElement> cells;XElement cell;if(!work.Rows.TryGetValue(r,out cells)||!cells.TryGetValue(c,out cell))return 0;object v=Value(cell);return v is double?(double)v:0;};
+                var drift=new List<string>();
+                for(int i=0;i<workPeople.Count;i++)for(int j=0;j<2;j++){int c=3+2*i+j;double total=number(6,c),sum=Enumerable.Range(7,days.Count).Sum(r=>number(r,c));
+                    if(Math.Abs(total-sum)>1e-9)drift.Add((workPeople[i]==""?"ВСЕГО":workPeople[i])+": "+(j==0?"коробов":"томов")+" по дням "+sum.ToString(Inv)+", всего "+total.ToString(Inv));}
+                if(drift.Count>0)result.Problems.Add(new Problem{File="Итоги работы",Row=6,Document="",Detail="сумма по дням не совпадает со «Всего» — "+string.Join("; ",drift.Take(6))+(drift.Count>6?" и ещё "+(drift.Count-6):"")+". Прошлые дни сохраняют числа прежних сборок, а «Всего» считается по текущим данным; «Пересчитать статистику» рассчитает все дни заново."});}
             string values="C6:"+MergeEngine.ExcelColumn(ww)+matrixLast;
             var boldRules=new XElement(N+"conditionalFormatting",new XAttribute("sqref",values),
                 new XElement(N+"cfRule",new XAttribute("type","cellIs"),new XAttribute("dxfId",Dxf(true)),new XAttribute("priority",1),new XAttribute("operator","notEqual"),new XElement(N+"formula","0")),

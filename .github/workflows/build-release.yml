@@ -22,7 +22,7 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          $version = '1.9.1'
+          $version = '2.0.0'
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
           ./build.ps1 -Version $version
       - name: Test merging and update validation
@@ -44,6 +44,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Remarks summary tests failed' }
           python tests/test_history.py
           if ($LASTEXITCODE -ne 0) { throw 'History tests failed' }
+          python tests/test_rd.py
+          if ($LASTEXITCODE -ne 0) { throw 'RD tests failed' }
           ./tests/test_report_width.ps1
           ./tests/test_updates.ps1
       - name: Publish portable package

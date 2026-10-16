@@ -439,6 +439,24 @@ def test_legacy_merges_do_not_hide_values():
             for col in range(left,right+1):
                 if (row,col)!=(top,left):assert raw.get(f'{get_column_letter(col)}{row}',('',None)) in [('',None)],str(merged)
 
+def test_numbers_row_among_data():
+    # A sort in Excel can move the row of column numbers (1, 2, 3 …) among the data: it is not a document and «9» is not a reviewer,
+    # even with the current date for new reviews; a date an earlier build wrote into its J is put back to 10.
+    temp=run_root/uuid.uuid4().hex;temp.mkdir();target=temp/'svod.xlsx'
+    w=load_workbook(ROOT/'tests/fixtures/Анна.xlsx');m=w['Все загруженные файлы'];numbers=[c.value for c in m[6]]
+    m.delete_rows(6);last=max(r for r in range(1,m.max_row+1) if m.cell(r,3).value)+1
+    for c,v in enumerate(numbers,1):m.cell(last,c,v)
+    m.cell(last,10,datetime(2026,10,4));w.save(target)
+    subprocess.run([str(ROOT/'Свод_проверки.exe'),'--batch',str(target),'--current-date-for-new','2026-10-04','Все загруженные файлы',str(ROOT/'tests/fixtures/Борис.xlsx')],check=True,timeout=120)
+    report=json.loads(Path(str(target)+'.run.json').read_text(encoding='utf-8-sig'))
+    assert report['Documents']==7 and any('номерами столбцов' in p for p in report['ProblemList']),report
+    cached=load_workbook(target,data_only=True);main=cached['Все загруженные файлы']
+    rows=[r for r in range(1,main.max_row+1) if [main.cell(r,c).value for c in range(1,10)]==list(range(1,10))]
+    assert rows==[last] and main.cell(last,10).value==10,(rows,[main.cell(r,10).value for r in rows])
+    work=cached['Итоги работы'];names=[str(work.cell(4,c).value) for c in range(1,work.max_column+1) if work.cell(4,c).value is not None]
+    assert '9' not in names and names,names
+    reference=cached['Справка по томам']
+    assert '9' not in {str(reference.cell(r,1).value) for r in range(1,reference.max_row+1)},'«9» is not a reviewer'
 test_merge()
 test_existing_target()
 test_user_columns()
@@ -457,5 +475,6 @@ test_changed_dates_and_new_people()
 test_names_suffixed_iul_inserted_rows()
 test_inserted_rows_keep_notes_and_box_counts()
 test_legacy_merges_do_not_hide_values()
+test_numbers_row_among_data()
 print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks, wide days, live dates, new reviewers, names, suffixed IUL and inserted rows')
 
