@@ -165,4 +165,4 @@ assert 'error' in refused and 'номерами столбцов' in refused['er
 bare = form(B / 'Без ведомости.xlsx', [row('К1', '1.1', who='Анна', date=D(5))], stage=False)
 failed = build(bare, boris)
 assert 'error' in failed and 'Ведомость' in failed['error'], failed
-print('RD tests passed: merge by set code, new sets after the data, statuses, elements, «СВОД», «Итоги проверки», «Статистика», PDF, repeated and file-less builds, growing ranges, missing stage list')
+print('RD tests passed: merge by set code, new sets after the data, statuses, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list')
