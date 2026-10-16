@@ -82,59 +82,6 @@ namespace ReviewMerge {
             int found=dxfs.Elements().TakeWhile(e=>e.ToString()!=dxf.ToString()).Count();if(found<dxfs.Elements().Count())return found;
             dxfs.Add(dxf);dxfs.SetAttributeValue("count",found+1);return found;
         }
-        // Cells of the dated tables keyed by what they mean, so that the previous and the new report find each other's cells:
-        // «СВОД» and the statistics "date|reviewer|column" (the date row itself has no reviewer), «Итоги работы» "m|date|reviewer/kind"
-        // for the table by days and "a|reviewer|date|column" for the alternative table. Totals that are not days have no key.
-        List<Tuple<string,double,int,int>> DatedCells(string sheet,IDictionary<int,SortedDictionary<int,XElement>> rows) {
-            var cells=new List<Tuple<string,double,int,int>>();var order=rows.Keys.OrderBy(r=>r).ToList();
-            Func<int,int,object> at=(r,c)=>{SortedDictionary<int,XElement> row;XElement cell;return rows.TryGetValue(r,out row)&&row.TryGetValue(c,out cell)?Value(cell):null;};
-            if(sheet!="Итоги работы") {
-                int header=order.FirstOrDefault(r=>Text(at(r,2))=="Дата / проверяющий");if(header==0)return cells;
-                int first=sheet=="СВОД"?4:3;double? date=null;
-                foreach(int r in order.Where(r=>r>header)) {
-                    object b=at(r,2);string who;
-                    if(b is double){date=(double)b;who="";}
-                    else {who=Text(b);if(who==""){if(date.HasValue)break;continue;}if(!date.HasValue)continue;}
-                    foreach(int c in rows[r].Keys.Where(c=>c>=first))cells.Add(Tuple.Create(date.Value.ToString(Inv)+"|"+who+"|"+c,date.Value,r,c));
-                }
-                return cells;
-            }
-            int matrix=order.FirstOrDefault(r=>Text(at(r,1))=="Этап"&&Text(at(r,2))=="Дата");
-            if(matrix>0) {
-                bool started=false;
-                foreach(int r in order.Where(r=>r>matrix+1)) {
-                    object b=at(r,2);if(!(b is double)){if(started)break;continue;}started=true;double d=(double)b;
-                    foreach(int c in rows[r].Keys.Where(c=>c>=3)){string who=Text(at(matrix,c%2==1?c:c-1)),kind=Text(at(matrix+1,c));if(who!="")cells.Add(Tuple.Create("m|"+d.ToString(Inv)+"|"+who+"/"+kind,d,r,c));}
-                }
-            }
-            int alt=order.FirstOrDefault(r=>Text(at(r,2))=="Проверяющий / дата");
-            if(alt>0) {
-                string who=null;
-                foreach(int r in order.Where(r=>r>alt)) {
-                    object b=at(r,2);
-                    if(b is double){if(who==null)continue;double d=(double)b;foreach(int c in rows[r].Keys.Where(c=>c>=3))cells.Add(Tuple.Create("a|"+who+"|"+d.ToString(Inv)+"|"+c,d,r,c));}
-                    else {string t=Text(b);if(t=="")break;who=t;}
-                }
-            }
-            return cells;
-        }
-        // Numbers of the dated cells of a previous report sheet; empty cells and texts are not kept.
-        Dictionary<string,double> PastValues(string sheet,XDocument doc) {
-            var rows=new SortedDictionary<int,SortedDictionary<int,XElement>>();
-            foreach(var row in doc.Root.Element(N+"sheetData").Elements(N+"row")){var cells=new SortedDictionary<int,XElement>();foreach(var c in row.Elements(N+"c"))cells[Column((string)c.Attribute("r"))]=c;rows[(int)row.Attribute("r")]=cells;}
-            var values=new Dictionary<string,double>(StringComparer.Ordinal);
-            foreach(var cell in DatedCells(sheet,rows)){object v=Value(rows[cell.Item3][cell.Item4]);if(v is double)values[cell.Item1]=(double)v;}
-            return values;
-        }
-        // Days before the report date take the numbers of the previous report as values; days without a previous number stay formulas.
-        void Freeze(string sheet,Grid g,Dictionary<string,Dictionary<string,double>> past,DateTime asOf,Func<string,int,double,int> restyle=null) {
-            Dictionary<string,double> old;if(!past.TryGetValue(sheet,out old)||old.Count==0)return;
-            foreach(var cell in DatedCells(sheet,g.Rows)) {
-                double v;if(cell.Item2>=asOf.ToOADate()||!old.TryGetValue(cell.Item1,out v))continue;
-                int style=(int?)g.Rows[cell.Item3][cell.Item4].Attribute("s")??0;if(restyle!=null)style=restyle(cell.Item1,style,v);
-                g.Rows[cell.Item3][cell.Item4]=Cell(cell.Item3,cell.Item4,v,style);
-            }
-        }
         int LeftAligned(int style) {
             string key="left|"+style;int id;if(reportStyleCache.TryGetValue(key,out id))return id;
             var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(style));xf.Element(N+"alignment").SetAttributeValue("horizontal","left");
@@ -143,9 +90,7 @@ namespace ReviewMerge {
         int SummaryStylesBase,RecreatedGrayFill,RecreatedDecimal;
         void WriteRecreatedReports(MergeResult result,List<double> calendar,DateTime asOf,List<double?> dates,List<int> issues,List<int[]> typeCounts,XDocument previous) {
             var l=referenceLayout;int h=l.Helper,fl=Math.Max(7,result.Rows.Count+6),vl=Math.Max(7,l.Volumes.Count+6);
-            // Past days keep the numbers of the previous reports; only the report date and later dates are calculated, unless the history is recalculated.
-            var past=new Dictionary<string,Dictionary<string,double>>();
-            if(!options.RecalculateHistory)foreach(string name in new[]{"СВОД","Стат. по типам","Стат. по зам.","Итоги работы"}){string path=PathFor(name);if(path!=null&&entries.ContainsKey(path))past[name]=PastValues(name,Xml(path));}
+            // Every day of the reports is calculated from the current data at every build.
             SummaryStylesBase=SummaryStyles()[0];var fills=styles.Root.Element(N+"fills");RecreatedGrayFill=fills.Elements().Count();
             fills.Add(new XElement(N+"fill",new XElement(N+"patternFill",new XAttribute("patternType","solid"),new XElement(N+"fgColor",new XAttribute("rgb","FFF2F2F2")),new XElement(N+"bgColor",new XAttribute("indexed",64)))));fills.SetAttributeValue("count",RecreatedGrayFill+1);
             var fmts=styles.Root.Element(N+"numFmts");RecreatedDecimal=Math.Max(164,fmts.Elements().Select(e=>(int)e.Attribute("numFmtId")).DefaultIfEmpty(163).Max()+1);
@@ -163,8 +108,6 @@ namespace ReviewMerge {
             // activity on the selected day. Standalone IULs and incomplete volumes do not qualify.
             var people=l.Volumes.Where(v=>v.IsVolume&&v.Date.HasValue&&v.Date.Value>0).Select(v=>StatKeyOf(v.Who)).Where(n=>n!="").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n=>n,StringComparer.CurrentCulture).ToList();
             var days=calendar.Concat(l.Blocks.Where(b=>b.Date.HasValue).Select(b=>b.Date.Value)).Distinct().OrderBy(d=>d).ToList();if(days.Count==0)days.Add(asOf.ToOADate());
-            // Days already reported stay in the reports, even when no record of the main sheet has that date any more.
-            if(past.ContainsKey("СВОД"))days=days.Concat(past["СВОД"].Keys.Select(k=>double.Parse(k.Substring(0,k.IndexOf('|')),Inv)).Where(d=>d<asOf.ToOADate())).Distinct().OrderBy(d=>d).ToList();
             Func<int,double,string,string,bool,Tuple<double,string>> metric=(kind,serial,day,who,daily)=> {
                 Func<string,string> dateCriteria=d=>daily?d+","+day:d+",\">0\","+d+",\"<=\"&"+day;
                 string fwho=who==""?"":","+ff+","+exact(who),vwho=who==""?"":","+vf+","+exact(who);
@@ -230,7 +173,6 @@ namespace ReviewMerge {
                     string[] parts=b.Item2.Split('\n');
                     for(int c=b.Item1;c<b.Item1+4;c++)main.Set(line,c,null,st);main.Set(line,b.Item1,b.Item2+b.Item4.ToString(Inv),st,Literal(parts[0])+"&CHAR(10)&"+Literal(parts[1])+"&("+b.Item5+")");mm.Add(MergeEngine.ExcelColumn(b.Item1)+line+":"+MergeEngine.ExcelColumn(b.Item1+3)+line);}
                 main.Heights[line]=34;}
-            Freeze("СВОД",main,past,asOf);
             SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+(mr-1)});
             string[] typeNames={"Несоответствие наименования тома","Несоответствие шифра тома","Несоответствие количества страниц","Отсутствуют подписи или печати на титуле","Несоответствие контрольной суммы в ИУЛ","Отсутствуют подписи в таблице ИУЛ","Текстовые замечания в описи","Дополнительные текстовые замечания","Всего замечаний","Томов с любыми замечаниями"};
             string[] statNames={"Файлов в реестре","Проверено файлов","Проверено томов (фрагменты и ИУЛ объединены)","Проверенных файлов с замечаниями","Проверенных томов с замечаниями","Впервые проверено файлов за сутки","Впервые проверено томов за сутки"};
@@ -251,7 +193,6 @@ namespace ReviewMerge {
                     string kr=range(8,fl);int j=0;foreach(string kind in new[]{"ИИ","ПД","ДПТ"}){int q=r+1+j++;g.Set(q,2,kind,plain);var ids=Enumerable.Range(0,result.Rows.Count).Where(i=>Text(result.Rows[i].Values[10])==kind).ToList();g.Set(q,3,ids.Count,plain,"COUNTIF("+kr+",$B"+q+")");g.Set(q,4,ids.Count(i=>dates[i].HasValue&&dates[i]<=asOf.ToOADate()),plain,"COUNTIFS("+kr+",$B"+q+","+fd+",\">0\","+fd+",\"<=\"&"+cutoff+")");g.Set(q,5,ids.Count(i=>dates[i].HasValue&&dates[i]<=asOf.ToOADate()&&issues[i]==1),plain,"COUNTIFS("+kr+",$B"+q+","+fd+",\">0\","+fd+",\"<=\"&"+cutoff+","+fi+",1)");}
                     g.Set(r+4,2,"Не проверено",plain);g.Set(r+4,3,result.Documents-dates.Count(d=>d.HasValue&&d<=asOf.ToOADate()),plain,"COUNTA("+range(11,fl)+")-COUNTIFS("+fd+",\">0\","+fd+",\"<=\"&"+cutoff+")");TableEdges(g,r,r+4,5);areas.Add("A"+r+":E"+(r+4));
                 }
-                Freeze(tab,g,past,asOf);
                 SaveReport(tab,g,width,new[]{Col(1,1,10),Col(2,2,28)}.Concat(Enumerable.Range(3,width-2).Select(c=>Col(c,c,c%2==0?7:14))),merges,areas.ToArray());
             }
             // Reviewer matrix and its alternative grouped representation.
@@ -277,13 +218,6 @@ namespace ReviewMerge {
             foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,heading);mm.Add("A"+r+":S"+r);mr+=2;}
             if(notes.Count>0)SaveReport("СВОД",main,19,new[]{Col(1,1,10),Col(2,2,28),Col(3,3,10)}.Concat(Enumerable.Range(4,16).Select(c=>Col(c,c,c%2==1?7:11))),mm,new[]{"A1:S"+mr});
             // Non-zero boxes and volumes of the first table are bold; the rules keep it so when Excel recalculates.
-            Freeze("Итоги работы",work,past,asOf,(key,style,v)=>key.StartsWith("m|",StringComparison.Ordinal)?ReportStyle(style,bold:v!=0):style);
-            // Past days keep the numbers of earlier builds while «Всего» is calculated from the data: the log says when they no longer add up.
-            {Func<int,int,double> number=(r,c)=>{SortedDictionary<int,XElement> cells;XElement cell;if(!work.Rows.TryGetValue(r,out cells)||!cells.TryGetValue(c,out cell))return 0;object v=Value(cell);return v is double?(double)v:0;};
-                var drift=new List<string>();
-                for(int i=0;i<workPeople.Count;i++)for(int j=0;j<2;j++){int c=3+2*i+j;double total=number(6,c),sum=Enumerable.Range(7,days.Count).Sum(r=>number(r,c));
-                    if(Math.Abs(total-sum)>1e-9)drift.Add((workPeople[i]==""?"ВСЕГО":workPeople[i])+": "+(j==0?"коробов":"томов")+" по дням "+sum.ToString(Inv)+", всего "+total.ToString(Inv));}
-                if(drift.Count>0)result.Problems.Add(new Problem{File="Итоги работы",Row=6,Document="",Detail="сумма по дням не совпадает со «Всего» — "+string.Join("; ",drift.Take(6))+(drift.Count>6?" и ещё "+(drift.Count-6):"")+". Прошлые дни сохраняют числа прежних сборок, а «Всего» считается по текущим данным; «Пересчитать статистику» рассчитает все дни заново."});}
             string values="C6:"+MergeEngine.ExcelColumn(ww)+matrixLast;
             var boldRules=new XElement(N+"conditionalFormatting",new XAttribute("sqref",values),
                 new XElement(N+"cfRule",new XAttribute("type","cellIs"),new XAttribute("dxfId",Dxf(true)),new XAttribute("priority",1),new XAttribute("operator","notEqual"),new XElement(N+"formula","0")),

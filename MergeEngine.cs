@@ -48,7 +48,7 @@ namespace ReviewMerge {
         public bool KeepLegacyReport;
         // PDF made after the build: paper, separate files or one file, names.
         public PdfSettings Pdf=new PdfSettings();
-        // Past days of the reports keep the numbers of the previous build; true calculates them again by the current rules.
+        // «Пересчитать статистику»: the reports from the consolidated book alone; every build recalculates all days anyway.
         public bool RecalculateHistory;
         // The volumes with remarks above «СВОД» are plain text; true frames each of them.
         public bool RemarksWithBorders;

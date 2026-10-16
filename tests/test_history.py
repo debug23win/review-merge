@@ -1,4 +1,4 @@
-"""Past days of the reports keep their numbers; volumes by «Номер тома»; recalculation by a separate command. Artificial data only."""
+"""Every day of the reports is recalculated from the current data; volumes by «Номер тома»; recalculation without files. Artificial data only."""
 import json, shutil, subprocess, uuid
 from datetime import datetime
 from pathlib import Path
@@ -49,12 +49,11 @@ output = book(B / 'svod.xlsx', documents)
 build('2026-10-02')
 assert checked_volumes(output) == {1: (1, True), 2: (2, True)}, checked_volumes(output)
 
-# A late record for 01.10 arrives on 03.10: the past days keep the numbers already reported, the report date counts it.
+# A late record for 01.10 arrives on 03.10: it is counted on its own day, so the days add up to the totals.
 late = reviewer_file('late.xlsx', lambda m, rows: (m.cell(rows['Том 3'], 9, 'Анна'), m.cell(rows['Том 3'], 10, datetime(2026, 10, 1))))
 build('2026-10-03', late)
-assert checked_volumes(output) == {1: (1, False), 2: (2, False), 3: (3, True)}, checked_volumes(output)
-# The «Справка» stays live: it already counts the late volume on its day.
-# A separate command recalculates every day by the current data and rules.
+assert checked_volumes(output) == {1: (2, True), 2: (3, True), 3: (3, True)}, checked_volumes(output)
+# The old switch still works: the same numbers.
 build('2026-10-03', '--recalculate-history')
 assert checked_volumes(output) == {1: (2, True), 2: (3, True), 3: (3, True)}, checked_volumes(output)
 
@@ -68,10 +67,10 @@ def numbers(m, rows):
 report = build('2026-10-04', reviewer_file('numbers.xlsx', numbers))
 assert any(note.startswith('«4»:') and 'Раздел 4 книга А' in note and 'Раздел 4 книга Б' in note for note in report['VolumeMerges']), report['VolumeMerges']
 assert not any(note.startswith(('«5»', '«б/н»')) for note in report['VolumeMerges']), 'one name is no merge; a bare «б/н» is no number'
-# Two volumes more on 04.10: «4» (two files) and «5» (with its ИУЛ); the past days keep their numbers.
-assert checked_volumes(output) == {1: (2, False), 2: (3, False), 3: (3, False), 4: (5, True)}, checked_volumes(output)
+# Two volumes more on 04.10: «4» (two files) and «5» (with its ИУЛ). Saturday 03.10 has no check, so it is no longer a day of the report.
+assert checked_volumes(output) == {1: (2, True), 2: (3, True), 4: (5, True)}, checked_volumes(output)
 reference = load_workbook(output, data_only=True)['Справка по томам']
 heads = {reference.cell(6, c).value: c for c in range(1, reference.max_column + 1) if reference.cell(6, c).value}
 volumes = [reference.cell(r, heads['Том (фрагменты и ИУЛ объединены)']).value for r in range(7, 20)]
 assert '№ 4' in volumes and '№ 5' in volumes and 'РАЗДЕЛ 4 КНИГА А' not in volumes and 'ТОМ 5' not in volumes, volumes
-print('History tests passed: frozen past days, live report date, recalculation, volumes by number with their IUL and merge notes')
+print('History tests passed: every day recalculated, late records on their own day, recalculation switch, volumes by number with their IUL and merge notes')
