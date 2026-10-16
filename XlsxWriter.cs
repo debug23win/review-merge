@@ -165,6 +165,9 @@ namespace ReviewMerge {
                 // A document repeated in the consolidated book gets the same review data in every repeated row.
                 foreach(var copy in row.TargetDuplicates){XElement other;if(existing.TryGetValue(copy.Row,out other))WriteMainRow(other,copy.Row,true,row,copy,sourceStyles);}
             }
+            // A row of column numbers among the data keeps its numbers: 10 in J, where an earlier build could put a date.
+            foreach(int rn in result.NumberRows){XElement numbers;if(!existing.TryGetValue(rn,out numbers))continue;var j=numbers.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==10);
+                if(j!=null&&Text(Value(j))!="10"){SetCell(numbers,Cell(rn,10,10.0,StyleAt(main,rn,9,bodyStyle)));var sorted=numbers.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();numbers.Add(sorted);}}
             int maxCol=Math.Max(mainColumns.Count,data.Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).DefaultIfEmpty(mainColumns.Count).Max());
             var dimension=main.Root.Element(N+"dimension");if(dimension==null){dimension=new XElement(N+"dimension");var sheetPr=main.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else main.Root.AddFirst(dimension);}dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(maxCol)+last);
             var filter=main.Root.Element(N+"autoFilter");

@@ -470,14 +470,14 @@ def test_reviewer_histories_and_global_totals():
     before = report_snapshot(target)
     run(target, source, AS_OF, '--recalculate-history')
     assert report_snapshot(target) == before, 'Repeat merge changed formulas, caches, grouping, dimensions or styles'
-    # A plain repeat build keeps the numbers of the days before the report date as values; the report date stays a formula.
+    # A plain repeat build gives the same numbers; every day, past ones too, stays a formula of the current data.
     values = report_values(target)
     run(target, source)
-    assert report_values(target) == values, 'Freezing past days changed a number'
+    assert report_values(target) == values, 'A repeat build changed a number'
     summary = load_workbook(target)['СВОД']
     rows = {summary.cell(r, 2).value: r for r in range(8, summary.max_row + 1) if isinstance(summary.cell(r, 2).value, datetime)}
     past, today = rows[min(rows)], rows[AS_OF]
-    assert not str(summary.cell(past, 10).value).startswith('=') and str(summary.cell(today, 10).value).startswith('='), (summary.cell(past, 10).value, summary.cell(today, 10).value)
+    assert str(summary.cell(past, 10).value).startswith('=') and str(summary.cell(today, 10).value).startswith('='), (summary.cell(past, 10).value, summary.cell(today, 10).value)
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
 
 

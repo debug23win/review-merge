@@ -42,11 +42,13 @@ namespace ReviewMerge {
     }
     public sealed class MergeOptions {
         public bool CurrentDateForNewReviews, MatchSurnames;
+        // Working documentation: the RD check sheet («Проверка комплектов») instead of the PD register.
+        public bool Rd;
         public bool KeepLegacyColumns;
         public bool KeepLegacyReport;
         // PDF made after the build: paper, separate files or one file, names.
         public PdfSettings Pdf=new PdfSettings();
-        // Past days of the reports keep the numbers of the previous build; true calculates them again by the current rules.
+        // «Пересчитать статистику»: the reports from the consolidated book alone; every build recalculates all days anyway.
         public bool RecalculateHistory;
         // The volumes with remarks above «СВОД» are plain text; true frames each of them.
         public bool RemarksWithBorders;
@@ -61,6 +63,9 @@ namespace ReviewMerge {
     }
     public sealed class MergeResult {
         public int Files, Documents, Reviewed, WithIssues, Boxes, DatesAssignedToday, FilledRows;
+        // Working documentation: Documents are sets, Boxes are elements checked by the report date, Elements all elements on the check sheet.
+        public bool Rd;
+        public int Elements;
         public string Output;
         // The two-page PDF of «СВОД» and «Итоги работы» next to the workbook, or why it was not made.
         public string Pdf, PdfError;
@@ -79,6 +84,8 @@ namespace ReviewMerge {
         public readonly List<string> ConvertedMarks = new List<string>();
         public int StartRow, HeaderRow;
         public RegisterColumns Columns;
+        // Rows of column numbers among the data of the consolidated book; a date written into one by an earlier build is put back.
+        public List<int> NumberRows = new List<int>();
     }
     public static class MergeEngine {
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -125,8 +132,10 @@ namespace ReviewMerge {
             var known = Paragraphs(Txt(target).Replace("\r\n", "\n"));
             return Paragraphs(Txt(value).Replace("\r\n", "\n")).All(p => known.Any(n => Covers(n, p)));
         }
-        static string JoinNotes(IEnumerable<SourceRow> rows, int col) {
-            var texts = rows.SelectMany(r => SourceTexts(r, col)).Where(t => t.Trim() != "").ToList();
+        static string JoinNotes(IEnumerable<SourceRow> rows, int col) { return JoinTexts(rows.SelectMany(r => SourceTexts(r, col))); }
+        // Different texts of one field, joined by paragraph: repeated text is kept once, a text that extends another replaces it.
+        internal static string JoinTexts(IEnumerable<string> sources) {
+            var texts = sources.Where(t => t != null && t.Trim() != "").ToList();
             if (texts.Count == 0) return null;
             if (texts.Distinct(StringComparer.Ordinal).Count() == 1) return texts[0];
             // Union by paragraph: a text that extends an earlier one replaces it instead of repeating it.
@@ -202,7 +211,9 @@ namespace ReviewMerge {
                 Check(token);
                 progress((int)(40.0 * fi / files.Count), "Чтение " + Path.GetFileName(files[fi]));
                 SourceBook source = XlsxReader.Read(files[fi], sheetName);
-                if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; result.Columns = new RegisterColumns {HasVolumeNumber = !options.KeepLegacyColumns || source.Columns.HasVolumeNumber}; }
+                if (fi == 0) { result.StartRow = source.DataStart; result.HeaderRow = source.HeaderRow; result.Columns = new RegisterColumns {HasVolumeNumber = !options.KeepLegacyColumns || source.Columns.HasVolumeNumber}; result.NumberRows = source.NumberRows; }
+                foreach (int numbers in source.NumberRows)
+                    result.Problems.Add(new Problem { File = files[fi], Row = numbers, Document = "", Detail = "Строка с номерами столбцов (1, 2, 3 …) стоит среди данных — вероятно, её переместила сортировка в Excel. Она не считается документом и не входит в статистику; верните её под шапку." });
                 foreach (var orphan in source.Orphans) {
                     result.History.Add(orphan);
                     AddProblem(result, orphan, "Есть данные проверки, но нет названия документа. В сводном документе такая строка сохраняется на месте; строка из другого источника не переносится без идентификации документа. В статистику документов не включена.");
@@ -335,12 +346,13 @@ namespace ReviewMerge {
         public static string ExcelColumn(int column) {
             string result=""; while(column>0) { column--; result=(char)('A'+column%26)+result; column/=26; } return result;
         }
-        static string Digest(string path) {
+        internal static string Digest(string path) {
             using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read))using(var hash=SHA256.Create())
                 return Convert.ToBase64String(hash.ComputeHash(stream));
         }
         public static MergeResult Run(IList<string> files,string output,string mainName,DateTime asOf,Action<int,string> progress,CancellationToken token,MergeOptions options=null) {
             options=options??new MergeOptions();
+            if(options.Rd)return RdEngine.Run(files,output,mainName,asOf,progress,token,options);
             output=Path.GetFullPath(output);
             if(Path.GetExtension(output).ToLowerInvariant()!=".xlsx") throw new InvalidOperationException("Результат необходимо сохранить с расширением .xlsx.");
             bool exists=File.Exists(output);string before=null;
