@@ -66,6 +66,8 @@ namespace ReviewMerge {
         // Working documentation: Documents are sets, Boxes are elements checked by the report date, Elements all elements on the check sheet.
         public bool Rd;
         public int Elements;
+        // RD: checks of the Technical expert dated by the letter of ТЭ.
+        public int ExpertDates;
         public string Output;
         // The two-page PDF of «СВОД» and «Итоги работы» next to the workbook, or why it was not made.
         public string Pdf, PdfError;

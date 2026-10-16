@@ -17,6 +17,7 @@ COL = {h.split('.')[0] if h[:2] in FLAGS else h: i for i, h in enumerate(HEADS, 
 # The stage list: element, name, sets with the status of ТЭ.
 STAGE = [('1.1', 'Мост', [('К1', 'Да'), ('К2', 'Да'), ('К3', 'Замечания')]), ('1.2', 'Труба', [('Т1', 'Да'), ('Т2', 'Да')]), ('1.3', 'Дорога', [('Д1', 'Да')])]
 NAME = {el: name for el, name, _ in STAGE}
+LETTER = {'К3': datetime(2026, 10, 6)}  # the date of the letter of ТЭ («Дата», column K of «Ведомость»)
 D = lambda day: datetime(2026, 10, day)
 
 
@@ -36,7 +37,7 @@ def form(path, rows, stage=True, acts=(), formula_rows=0, extra=None):
         for el, name, sets in STAGE:
             for k, (code, te) in enumerate(sets):
                 if k == 0: v.cell(r, 1, el); v.cell(r, 2, name)
-                v.cell(r, 4, code); v.cell(r, 5, 'Комплект ' + code); v.cell(r, 9, te); r += 1
+                v.cell(r, 4, code); v.cell(r, 5, 'Комплект ' + code); v.cell(r, 9, te); v.cell(r, 11, LETTER.get(code)); r += 1
     a = wb.create_sheet('Проверка актов')
     for c, h in enumerate(['№ п/п', 'Номер элемента', 'Наименование элемента', '№ акта', 'Дата акта', 'Проверил', 'Дата проверки', 'А1. акт', 'А2. акт', 'Замечания (текст)', 'Замечания устранены', 'Результат проверки акта'], 1):
         a.cell(5, c, h); a.cell(6, c, c)
@@ -61,14 +62,42 @@ def build(output, *sources, day='2026-10-08'):
     return json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 
 
+def assert_sums(path):
+    """The reports add up: days to totals, reviewers to the date rows, «Итоги проверки» and «Статистика» to «СВОД»."""
+    wb = load_workbook(path, data_only=True); sv, tv, st = wb['СВОД'], wb['Итоги проверки'], wb['Статистика']
+    num = lambda v: v if isinstance(v, (int, float)) else 0
+    rows = [r for r in range(8, sv.max_row + 1) if isinstance(sv.cell(r, 2).value, datetime)]
+    people = rows[1] - rows[0] - 1 if len(rows) > 1 else sv.max_row
+    report = rows[-1]
+    for k, r in enumerate(rows):
+        persons = range(r + 1, r + 1 + people) if len(rows) > 1 else []
+        for c in (8, 10, 16, 18):
+            if persons: assert num(sv.cell(r, c).value) == sum(num(sv.cell(p, c).value) for p in persons), ('reviewers to the date row', r, c)
+        for total, daily in ((8, 16), (10, 18)):
+            before = num(sv.cell(rows[k - 1], total).value) if k else 0
+            assert num(sv.cell(r, total).value) == before + num(sv.cell(r, daily).value), ('cumulative and daily', r, total)
+            assert num(sv.cell(r, total - 4).value) - num(sv.cell(r, total).value) == num(sv.cell(r, total + 4).value), ('remaining', r, total)
+    width = next(c for c in range(3, tv.max_column + 1) if tv.cell(4, c).value == 'ВСЕГО') + 1
+    last = max(r for r in range(7, tv.max_row + 1) if isinstance(tv.cell(r, 2).value, datetime) and r < 7 + len(rows) + 1)
+    for c in range(3, width + 1):
+        assert num(tv.cell(6, c).value) == sum(num(tv.cell(r, c).value) for r in range(7, last + 1)), ('days to «Всего»', c)
+    for r in range(6, last + 1):
+        for j in (0, 1): assert num(tv.cell(r, width - 1 + j).value) == sum(num(tv.cell(r, c).value) for c in range(3 + j, width - 1, 2)), ('reviewers to «ВСЕГО»', r)
+    assert (num(tv.cell(6, width - 1).value), num(tv.cell(6, width).value)) == (num(sv.cell(report, 8).value), num(sv.cell(report, 10).value)), '«Итоги проверки» and «СВОД»'
+    stats = {st.cell(r, 1).value: st.cell(r, 2).value for r in range(6, st.max_row + 1) if st.cell(r, 1).value}
+    assert stats['Проверено по состоянию на дату отчёта (как в «СВОД»)'] == num(sv.cell(report, 10).value), '«Статистика» and «СВОД»'
+    statuses = ['Готово к ВПР', 'С неустранёнными замечаниями', 'Не согласовано ТЭ', 'Не соответствуют ВЭ РД (нет в ведомости или другой элемент)']
+    assert sum(num(stats[k]) for k in statuses) <= num(sv.cell(report, 6).value)
+
+
 target = form(B / 'Сводная РД.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('К2', who='Анна', date=D(5), П1=1, text='Нет подписи'),
-                                       row('К3', who='ТЭ', ПР=1, text='Не согласован ТЭ')],
+                                       row('К3', who='тех. эксперт', ПР=1, text='Не согласован ТЭ')],
               acts=[{2: '1.2', 4: 'А-1', 6: 'Борис', 7: D(8), 8: 1}])
 boris = form(B / 'Борис.xlsx', [row('Т1', '1.2', who='Борис', date=D(6)), row('Т2', who='Борис', date=D(6), Э3=1), row('К2', '1.1', who='Анна', date=D(5), fixed=D(7), text='Нет подписи')])
 vera = form(B / 'Вера.xlsx', [row('Д1', '1.3', who='Вера', date=D(7), note='проверить ВОР'), row('Т2', '1.2', who='Вера', date=D(7), П2=1, text='Нет печати')])
 report = build(target, boris, vera)
 assert 'error' not in report, report
-assert (report['Rd'], report['Documents'], report['Elements'], report['Boxes'], report['Reviewed']) == (True, 6, 3, 2, 6), report
+assert (report['Rd'], report['Documents'], report['Elements'], report['Boxes'], report['Reviewed']) == (True, 6, 3, 3, 6), report
 assert report['Pdfs'] and all(Path(p).exists() for p in report['Pdfs']) and report['PdfError'] is None, report
 assert [Path(p).name for p in report['Pdfs']] == ['Сводная РД СВОД 2026.10.08.pdf', 'Сводная РД Итоги проверки 2026.10.08.pdf'], report['Pdfs']
 
@@ -84,47 +113,49 @@ assert [get(c, 'Номер элемента') for c in ('Т1', 'Т2', 'Д1')] ==
 # Every «1» is kept, the reviewer and the date come from the latest dated check, «Замечания устранены» from the files.
 assert (get('Т2', 'Проверил'), get('Т2', 'Дата проверки'), get('Т2', 'П2'), get('Т2', 'Э3'), get('Т2', 'Замечания (текст для письма подрядчику)')) == ('Вера', D(7), 1, 1, 'Нет печати')
 assert get('К2', 'Замечания устранены') == D(7) and get('К2', 'Проверил') == 'Анна' and get('К2', 'П1') == 1
+# The Technical expert however written is «ТЭ», a reviewer like the others, dated by the letter of ТЭ when the row has no date.
+assert (get('К3', 'Проверил'), get('К3', 'Дата проверки')) == ('ТЭ', D(6)), (get('К3', 'Проверил'), get('К3', 'Дата проверки'))
 status = {c: mv.cell(r, COL['Статус комплекта']).value for c, r in codes.items()}
 assert status == {'К1': 'готово к ВПР', 'К2': 'готово к ВПР', 'К3': 'замечания', 'Т1': 'готово к ВПР', 'Т2': 'замечания', 'Д1': 'замечания'}, status
 assert all(str(m.cell(r, COL[k]).value).startswith('=') for r in range(7, 7 + 6 + 50) for k in ('Сверка с ВЭ РД', 'Статус комплекта', 'Действующая редакция', 'Элемент строки'))
 assert '$D$7:$D$62' in m.cell(7, COL['Действующая редакция']).value, m.cell(7, COL['Действующая редакция']).value
 
-# «Элементы»: the element of a remark of ТЭ has no check date; the others are finished on the day of their last set.
+# «Элементы»: an element is finished on the day of its last current set, by whoever checked it — ТЭ too.
 e, ev = wb['Элементы'], cached['Элементы']
 val = lambda x: '' if x is None else x
 elements = {ev.cell(r, 1).value: [val(ev.cell(r, c).value) for c in (4, 5, 8, 9, 11, 12, 13, 16, 17, 18)] for r in range(6, 9)}
-assert elements == {'1.1': [3, 3, 2, 1, 2, 'замечания', 'не поступал', '', '', 1], '1.2': [2, 2, 2, 1, 1, 'замечания', 'замечания', D(7), 'Вера', 0],
+assert elements == {'1.1': [3, 3, 3, 1, 2, 'замечания', 'не поступал', D(6), 'ТЭ', 1], '1.2': [2, 2, 2, 1, 1, 'замечания', 'замечания', D(7), 'Вера', 0],
                     '1.3': [1, 1, 1, 1, 0, 'замечания', 'не поступал', D(7), 'Вера', 0]}, elements
 assert e['A6'].value.startswith('=IFERROR(INDEX(') and ev['A9'].value in (None, '')
 
-# «СВОД»: days from the first check (working days and the report date), the reviewers under the last day; ТЭ under the table.
+# «СВОД»: days from the first check (working days and the report date), the reviewers under the last day, ТЭ last; no line of ТЭ under the table.
 s, sv = wb['СВОД'], cached['СВОД']
 assert sv['U2'].value == D(8) and sv['A8'].value == 'Этап 9', (sv['U2'].value, sv['A8'].value)
-assert sv['D4'].value == 'Всего комплектов\nс замечаниями: 3' and sv['H4'].value == 'Устранено замечаний\nпо комплектам: 1' and sv['L4'].value == 'Устраняется комплектов\nс замечаниями: 2', (sv['D4'].value, sv['H4'].value, sv['L4'].value)
+assert sv['D4'].value == 'Всего комплектов\nс замечаниями: 4' and sv['H4'].value == 'Устранено замечаний\nпо комплектам: 1' and sv['L4'].value == 'Устраняется комплектов\nс замечаниями: 3', (sv['D4'].value, sv['H4'].value, sv['L4'].value)
 days = [r for r in range(8, s.max_row + 1) if isinstance(sv.cell(r, 2).value, datetime)]
 assert [sv.cell(r, 2).value for r in days] == [D(5), D(6), D(7), D(8)], [sv.cell(r, 2).value for r in days]
-assert [[sv.cell(r, c).value for c in (4, 6, 8, 10, 12, 14, 16, 18)] for r in days] == [[3, 6, 0, 2, 3, 4, 0, 2], [3, 6, 0, 3, 3, 3, 0, 1], [3, 6, 2, 5, 1, 1, 2, 2], [3, 6, 2, 5, 1, 1, 0, 0]]
-people = {sv.cell(r, 2).value: [sv.cell(r, c).value for c in (8, 10, 16, 18)] for r in range(days[-1] + 1, days[-1] + 4)}
-assert people == {'Анна': [0, 2, 0, 0], 'Борис': [0, 1, 0, 0], 'Вера': [2, 2, 0, 0]}, people
-assert all(s.row_dimensions[r].hidden for r in range(days[0] + 1, days[0] + 4)) and not s.row_dimensions[days[-1] + 1].hidden
-assert all(s.row_dimensions[r].outline_level == 1 for r in range(days[-1] + 1, days[-1] + 4))
-te = days[-1] + 5
-assert sv.cell(te, 1).value.startswith('Замечания ТЭ') and (sv.cell(te, 4).value, sv.cell(te, 6).value) == (1, 1), [sv.cell(te, c).value for c in range(1, 8)]
+assert [[sv.cell(r, c).value for c in (4, 6, 8, 10, 12, 14, 16, 18)] for r in days] == [[3, 6, 0, 2, 3, 4, 0, 2], [3, 6, 1, 4, 2, 2, 1, 2], [3, 6, 3, 6, 0, 0, 2, 2], [3, 6, 3, 6, 0, 0, 0, 0]]
+people = {sv.cell(r, 2).value: [sv.cell(r, c).value for c in (8, 10, 16, 18)] for r in range(days[-1] + 1, days[-1] + 5)}
+assert people == {'Анна': [0, 2, 0, 0], 'Борис': [0, 1, 0, 0], 'Вера': [2, 2, 0, 0], 'ТЭ': [1, 1, 0, 0]} and sv.cell(days[-1] + 4, 2).value == 'ТЭ', people
+assert all(s.row_dimensions[r].hidden for r in range(days[0] + 1, days[0] + 5)) and not s.row_dimensions[days[-1] + 1].hidden
+assert all(s.row_dimensions[r].outline_level == 1 for r in range(days[-1] + 1, days[-1] + 5))
+assert not any(str(sv.cell(r, 1).value or '').startswith('Замечания ТЭ') for r in range(1, s.max_row + 1)) and sv.cell(days[-1] + 6, 1).value == 'Примечание:'
 assert s['J8'].value.startswith('=IF($B8>$U$2,"",COUNTIFS(') and 'Элементы' in s['H8'].value
 
 # «Итоги проверки»: elements finished and sets checked by reviewer; the bold of non-zero values; the alternative table with the acts.
 t, tv = wb['Итоги проверки'], cached['Итоги проверки']
-assert [tv.cell(4, c).value for c in (3, 5, 7, 9)] == ['Анна', 'Борис', 'Вера', 'ВСЕГО']
-assert [tv.cell(6, c).value for c in range(3, 11)] == [0, 2, 0, 1, 2, 2, 2, 5], [tv.cell(6, c).value for c in range(3, 11)]
-assert [tv.cell(9, c).value for c in range(3, 11)] == [0, 0, 0, 0, 2, 2, 2, 2] and t.cell(9, 7).font.b and not t.cell(9, 3).font.b
+assert [tv.cell(4, c).value for c in (3, 5, 7, 9, 11)] == ['Анна', 'Борис', 'Вера', 'ТЭ', 'ВСЕГО']
+assert [tv.cell(6, c).value for c in range(3, 13)] == [0, 2, 0, 1, 2, 2, 1, 1, 3, 6], [tv.cell(6, c).value for c in range(3, 13)]
+assert [tv.cell(9, c).value for c in range(3, 13)] == [0, 0, 0, 0, 2, 2, 0, 0, 2, 2] and t.cell(9, 7).font.b and not t.cell(9, 3).font.b
 alt = next(r for r in range(1, t.max_row + 1) if tv.cell(r, 2).value == 'Борис' and r > 12)
 assert [tv.cell(alt, c).value for c in (3, 4, 5, 6)] == [1, 0, 0, 1], [tv.cell(alt, c).value for c in (3, 4, 5, 6)]
-assert '$A$1:$S$' in s.print_area and '$A$1:$J$10' in t.print_area, (s.print_area, t.print_area)
+assert '$A$1:$S$' in s.print_area and '$A$1:$L$10' in t.print_area, (s.print_area, t.print_area)
 
 # «Статистика»: sets of the stage list, presented, checked, statuses.
 st = cached['Статистика']
 stats = {st.cell(r, 1).value: st.cell(r, 2).value for r in range(6, st.max_row + 1) if st.cell(r, 1).value}
-assert (stats['В ведомости элементов РД (ВЭ РД)'], stats['Представлено на проверку (действующие редакции из ВЭ РД)'], stats['Проверено по состоянию на дату отчёта'], stats['Готово к ВПР'], stats['Замечания ТЭ («Проверил: ТЭ»)']) == (6, 6, 5, 3, 1), stats
+assert (stats['В ведомости элементов РД (ВЭ РД)'], stats['Представлено на проверку (действующие редакции из ВЭ РД)'], stats['Проверено по состоянию на дату отчёта (как в «СВОД»)'], stats['Готово к ВПР'], stats['Замечания ТЭ («Проверил: ТЭ»)']) == (6, 6, 6, 3, 1), stats
+assert_sums(target)
 
 # The same files again change nothing; a build without files recalculates the reports from the book.
 before = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги проверки', 'Элементы') for r in load_workbook(target, data_only=True)[n].iter_rows() for c in r}
@@ -132,7 +163,7 @@ again = build(target, boris, vera)
 after = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги проверки', 'Элементы') for r in load_workbook(target, data_only=True)[n].iter_rows() for c in r}
 assert again['Documents'] == 6 and before == after, [k for k in before if before[k] != after.get(k)][:10]
 alone = build(target)
-assert alone['Files'] == 0 and alone['Documents'] == 6 and alone['Boxes'] == 2, alone
+assert alone['Files'] == 0 and alone['Documents'] == 6 and alone['Boxes'] == 3, alone
 
 # A form with prepared formula rows: the ranges of the formulas, of other sheets and of the validation follow the data down.
 def own_sheet(wb):
@@ -141,6 +172,15 @@ grown = form(B / 'Рост.xlsx', [row('К1', '1.1', who='Анна', date=D(5))]
 many = form(B / 'Много.xlsx', [row('Х%d' % i, '1.2' if i == 0 else None, who='Борис', date=D(6)) for i in range(60)])
 result = build(grown, many)
 assert result['Documents'] == 61, result
+assert_sums(grown)
+
+# Letters of ТЭ months before the checks add their own days only, not all the working days from them.
+early = form(B / 'Письма ТЭ.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('К3', who='ТЭ', ПР=1)])
+w = load_workbook(early); w['Ведомость'].cell(9, 11, datetime(2026, 4, 8)); w.save(early)
+assert 'error' not in build(early)
+sv = load_workbook(early, data_only=True)['СВОД']
+assert [sv.cell(r, 2).value for r in range(8, sv.max_row + 1) if isinstance(sv.cell(r, 2).value, datetime)] == [datetime(2026, 4, 8), D(5), D(6), D(7), D(8)]
+assert_sums(early)
 g = load_workbook(grown)
 assert g['Мой лист']['A1'].value == "=COUNTIF('Проверка комплектов'!$D$7:$D$117,\"?*\")", g['Мой лист']['A1'].value
 assert '$D$7:$D$117' in g[MAIN].cell(7, COL['Действующая редакция']).value

@@ -304,7 +304,7 @@ namespace ReviewMerge {
                     new object[] { e == null ? "" : (object)(double)e.Presented, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"да\"))" },
                     new object[] { e == null ? "" : (object)(double)e.Missing, blank + "MAX(0,D" + r + "-E" + r + "))" },
                     new object[] { e == null ? "" : (object)(double)e.NotInVe, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"<>да\"))" },
-                    new object[] { e == null ? "" : (object)(double)e.Checked, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"да\"," + M("status") + ",\"<>не проверен\"," + M("who") + ",\"<>" + RdBook.Expert + "\"))" },
+                    new object[] { e == null ? "" : (object)(double)e.Checked, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"да\"," + M("status") + ",\"<>не проверен\"))" },
                     new object[] { e == null ? "" : (object)(double)e.Remarks, blank + "COUNTIFS(" + live + "," + M("status") + ",\"замечания\"))" },
                     new object[] { e == null ? "" : (object)(double)e.NotAgreed, blank + "COUNTIFS(" + live + "," + M("status") + ",\"не согласован ТЭ\"))" },
                     new object[] { e == null ? "" : (object)(double)e.Ready, blank + "COUNTIFS(" + live + "," + M("status") + ",\"готово к ВПР\"))" },
@@ -312,8 +312,8 @@ namespace ReviewMerge {
                     new object[] { e == null ? "" : e.Act, act },
                     new object[] { e == null ? "" : e.ActVe, look("N") },
                     new object[] { e == null ? "" : e.Vpr, look("R") },
-                    // The day of the last current set when every current set has a date and none is a remark of ТЭ; who checked that set.
-                    new object[] { e == null || !e.Date.HasValue ? "" : (object)e.Date.Value, blank + "IF(AND(COUNTIFS(" + live + ")=COUNTIFS(" + live + "," + M("date") + ",\">0\"),COUNTIFS(" + live + "," + M("who") + ",\"" + RdBook.Expert + "\")=0),SUMPRODUCT(MAX((" + M("elkey") + "=" + a + ")*(" + M("latest") + "=1)*" + M("date") + ")),\"\"))" },
+                    // The day of the last current set when every current set has a reviewer and a date (ТЭ too); who checked that set.
+                    new object[] { e == null || !e.Date.HasValue ? "" : (object)e.Date.Value, blank + "IF(COUNTIFS(" + live + ")=COUNTIFS(" + live + "," + M("date") + ",\">0\"," + M("who") + ",\"<>\"),SUMPRODUCT(MAX((" + M("elkey") + "=" + a + ")*(" + M("latest") + "=1)*" + M("date") + ")),\"\"))" },
                     new object[] { e == null ? "" : e.Who, "IF(OR(" + a + "=\"\",N(P" + r + ")=0),\"\",IFERROR(LOOKUP(2,1/((" + M("elkey") + "=" + a + ")*(" + M("latest") + "=1)*(" + M("date") + "=P" + r + "))," + M("who") + "),\"\"))" },
                     new object[] { e == null ? "" : (object)(double)e.Expert, blank + "COUNTIFS(" + live + "," + M("who") + ",\"" + RdBook.Expert + "\"))" } };
                 for (int i = 0; i < cells.Length; i++) sh.Set(r, i + 1, cells[i][0], i == 1 ? name : i == 15 ? day : formula, (string)cells[i][1]);
@@ -348,7 +348,7 @@ namespace ReviewMerge {
             block("Комплекты РД", new[] {
                 new object[] { "В ведомости элементов РД (ВЭ РД)", "COUNTIF(" + Sheet(Ved) + "$AG$" + rd.Ved.First + ":$AG$" + rd.Ved.HelperLast + ",\"?*\")", rd.Ved.Sets },
                 new object[] { "Представлено на проверку (действующие редакции из ВЭ РД)", "COUNTIFS(" + live + "," + M("ve") + ",\"да\")", sets.Count(s => s.Ve == "да") },
-                new object[] { "Проверено по состоянию на дату отчёта", "COUNTIFS(" + live + "," + M("ve") + ",\"да\"," + M("date") + ",\"<=\"&$B$4," + M("who") + ",\"<>" + RdBook.Expert + "\")", sets.Count(s => s.Ve == "да" && s.Date.HasValue && s.Date.Value <= report && !s.Expert) },
+                new object[] { "Проверено по состоянию на дату отчёта (как в «СВОД»)", "COUNTIFS(" + live + "," + M("date") + ",\"<=\"&$B$4," + M("who") + ",\"<>\")", sets.Count(s => s.Date.HasValue && s.Date.Value <= report && s.Who != "") },
                 new object[] { "Готово к ВПР", "COUNTIFS(" + live + "," + M("status") + ",\"готово к ВПР\")", sets.Count(s => s.Status == "готово к ВПР") },
                 new object[] { "С неустранёнными замечаниями", "COUNTIFS(" + live + "," + M("status") + ",\"замечания\")", sets.Count(s => s.Status == "замечания") },
                 new object[] { "Замечания устранены", "COUNTIFS(" + live + "," + M("cnt") + ",\">0\"," + done + ")", sets.Count(s => s.Cnt > 0 && resolved(s)) },
@@ -397,20 +397,20 @@ namespace ReviewMerge {
         void WriteRdSummary(DateTime asOf) {
             var sh = new RdSheet { Grid = false }; double report = asOf.Date.ToOADate();
             var latest = rd.Sets.Where(s => s.Latest).ToList(); var people = rd.People; var days = rd.Days;
-            string team = M("who") + ",\"<>" + RdBook.Expert + "\"", lat = M("latest"), date = M("date"), who = M("who");
+            string team = M("who") + ",\"<>\"", lat = M("latest"), date = M("date"), who = M("who");
             double[] widths = { 10, 28, 10 };
             for (int c = 1; c <= 19; c++) sh.Width(c, c, c <= 3 ? widths[c - 1] : (c - 4) % 2 == 0 ? 11 : 7);
             sh.Width(21, 21, 14);
             sh.Merge(1, 1, 1, 19); sh.Set(1, 1, "СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ РАБОЧЕЙ ДОКУМЕНТАЦИИ", Rs(16, true));
             sh.Set(2, 1, Stage(), Rs(12, h: "left", wrap: false));
-            sh.Merge(3, 1, 3, 19); sh.Set(3, 1, "Проверено — накопительно по датам и проверяющим; проверено за сутки — за указанный день. Комплекты — действующие редакции. Замечания ТЭ — отдельной строкой под таблицей.", Rs(12, h: "left", wrap: false));
+            sh.Merge(3, 1, 3, 19); sh.Set(3, 1, "Проверено — накопительно по датам и проверяющим; проверено за сутки — за указанный день. Комплекты — действующие редакции; ТЭ — проверяющий, как остальные.", Rs(12, h: "left", wrap: false));
             sh.Set(1, 21, "Дата отчёта", Rs(12, true)); sh.Set(2, 21, report, Rs(12, true, fill: "FFFFFF00", fmt: "dd.mm.yyyy"));
             sh.Set(3, 21, "← дата сборки, в печать не попадает", Rs(9, color: Red, h: "left", wrap: false));
             double[] heights = { 32, 24, 24, 34, 32, 30, 26 }; for (int i = 0; i < heights.Length; i++) sh.Heights[i + 1] = heights[i];
             // Sets with remarks above the table, as the volumes with remarks above the PD «СВОД».
             string checkedSets = lat + ",1," + M("cnt") + ",\">0\"," + date + ",\">0\"," + date + ",\"<=\"&$U$2," + team;
             string remarked = "COUNTIFS(" + checkedSets + ")", resolved = "(COUNTIFS(" + checkedSets + "," + M("status") + ",\"готово к ВПР\")+COUNTIFS(" + checkedSets + "," + M("status") + ",\"не согласован ТЭ\"))";
-            var withRemarks = latest.Where(s => s.Cnt > 0 && s.Date.HasValue && s.Date.Value <= report && !s.Expert).ToList();
+            var withRemarks = latest.Where(s => s.Cnt > 0 && s.Date.HasValue && s.Date.Value <= report && s.Who != "").ToList();
             int remarkedCount = withRemarks.Count, resolvedCount = withRemarks.Count(s => s.Status == "готово к ВПР" || s.Status == "не согласован ТЭ");
             var above = new[] { new object[] { 4, Gold, "Всего комплектов", "с замечаниями: ", remarked, remarkedCount }, new object[] { 8, Green, "Устранено замечаний", "по комплектам: ", resolved, resolvedCount },
                 new object[] { 12, Red, "Устраняется комплектов", "с замечаниями: ", remarked + "-" + resolved, remarkedCount - resolvedCount } };
@@ -435,9 +435,9 @@ namespace ReviewMerge {
                 Func<string, string> cut = f => "IF(" + d + ">$U$2,\"\"," + f + ")";
                 var counts = new Dictionary<int, double> {
                     { 4, rd.Elements.Count }, { 6, latest.Count },
-                    { 8, rd.Elements.Count(e => e.Date.HasValue && e.Date.Value > 0 && e.Date.Value <= day) }, { 10, latest.Count(s => s.Date.HasValue && s.Date.Value <= day && !s.Expert) } };
+                    { 8, rd.Elements.Count(e => e.Date.HasValue && e.Date.Value > 0 && e.Date.Value <= day) }, { 10, latest.Count(s => s.Date.HasValue && s.Date.Value <= day && s.Who != "") } };
                 counts[12] = counts[4] - counts[8]; counts[14] = counts[6] - counts[10];
-                counts[16] = rd.Elements.Count(e => e.Date == day); counts[18] = latest.Count(s => s.Date == day && !s.Expert);
+                counts[16] = rd.Elements.Count(e => e.Date == day); counts[18] = latest.Count(s => s.Date == day && s.Who != "");
                 var formulas = new Dictionary<int, string> {
                     { 4, "COUNTIF(" + E("A") + ",\"?*\")" }, { 6, "COUNTIF(" + lat + ",1)" }, { 8, "COUNTIFS(" + E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + d + ")" },
                     { 10, "COUNTIFS(" + lat + ",1," + date + ",\">0\"," + date + ",\"<=\"&" + d + "," + team + ")" }, { 12, "D" + top + "-H" + top }, { 14, "F" + top + "-J" + top },
@@ -467,18 +467,9 @@ namespace ReviewMerge {
                 sh.Merge(8, 1, last, 1);
                 for (int r = 8; r <= last; r++) sh.Set(r, 1, r == 8 ? StageLabel() : null, SummaryStyle(1, "thin", r == last ? "thick" : "thin", false, false));
             }
-            // Remarks of the Technical expert under the table: not in the reviewers' statistics, the sets wait for ТЭ to agree.
-            int t = last + 2, lastTop = last - people.Count;
-            sh.Merge(t, 1, t, 3); int box = Rs(11, true, color: Red, l: "thin", r: "thin", t: "thin", b: "thin");
-            for (int c = 1; c <= 3; c++) sh.Set(t, c, c == 1 ? "Замечания ТЭ («Проверил: ТЭ»), в статистику проверяющих не входят" : null, box);
-            double expertElements = rd.Elements.Count(e => e.Expert > 0), expertSets = latest.Count(s => s.Expert), lastElements = rd.Elements.Count, lastSets = latest.Count;
-            sh.Set(t, 4, expertElements, Rs(12, true, color: Red, fmt: "0", l: "thin", r: "thin", t: "thin", b: "thin"), "COUNTIF(" + E("R") + ",\">0\")");
-            sh.Set(t, 5, lastElements == 0 ? 0 : expertElements / lastElements * 100, Rs(9, true, true, Red, fmt: "0.0", l: "thin", r: "thin", t: "thin", b: "thin"), "IFERROR(D" + t + "/$D$" + lastTop + "*100,0)");
-            sh.Set(t, 6, expertSets, Rs(12, true, color: Red, fmt: "0", l: "thin", r: "thin", t: "thin", b: "thin"), "COUNTIFS(" + lat + ",1," + who + ",\"" + RdBook.Expert + "\")");
-            sh.Set(t, 7, lastSets == 0 ? 0 : expertSets / lastSets * 100, Rs(9, true, true, Red, fmt: "0.0", l: "thin", r: "thin", t: "thin", b: "thin"), "IFERROR(F" + t + "/$F$" + lastTop + "*100,0)");
-            sh.Set(t, 8, "элементов / комплектов, ждут согласования ТЭ", Rs(10, color: Red, h: "left", wrap: false)); sh.Heights[t] = 30;
-            sh.Merge(t + 2, 1, t + 2, 19); sh.Set(t + 2, 1, "Примечание:", Rs(12, h: "left", wrap: false));
-            RdPut(RdSummarySheet, RdXml(sh), Sheet(RdSummarySheet) + "$A$1:$S$" + (t + 2));
+            int t = last + 2;
+            sh.Merge(t, 1, t, 19); sh.Set(t, 1, "Примечание:", Rs(12, h: "left", wrap: false));
+            RdPut(RdSummarySheet, RdXml(sh), Sheet(RdSummarySheet) + "$A$1:$S$" + t);
         }
         // The Шт. and % columns of a «СВОД» row: an empty cell where the row shows nothing, the share of the date row's totals in %.
         void SummaryNumbers(RdSheet sh, int row, int top, Dictionary<int, double> counts, Dictionary<int, string> formulas, Func<string, string> cut, bool bold, bool gray, bool bottom, Func<int, bool> shown) {
@@ -500,7 +491,7 @@ namespace ReviewMerge {
             sh.Width(1, 1, 10); sh.Width(2, 2, 18); sh.Width(3, width, 13);
             sh.Set(1, 1, "СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ", Rs(16, true, h: "left", wrap: false));
             sh.Set(2, 1, Stage(), Rs(12, h: "left", wrap: false));
-            sh.Set(3, 1, "Элементов — элементы, проверка которых завершена в этот день; комплектов — все проверки за день, включая повторные. Замечания ТЭ не входят.", Rs(10, italic: true, h: "left", wrap: false));
+            sh.Set(3, 1, "Элементов — элементы, проверка которых завершена в этот день; комплектов — действующие редакции, проверенные в этот день, как в «СВОД». ТЭ — проверяющий, как остальные.", Rs(10, italic: true, h: "left", wrap: false));
             sh.Heights[1] = 32; sh.Heights[2] = 24;
             Func<int, string[]> edges = c => c == 1 ? new[] { "thick", "thin" } : c == 2 ? new[] { "thin", "medium" } : c % 2 == 1 ? new[] { "medium", "thin" } : new[] { "thin", c == width ? "thick" : "medium" };
             Func<int, string, string, bool, bool, string, string, int> style = (c, top, bottom, bold, gray, fmt, color) => { var e = edges(c); return Rs(12, bold, false, color ?? Black, gray ? Gray : null, fmt, "center", "center", true, e[0], e[1], top, bottom); };
@@ -515,17 +506,17 @@ namespace ReviewMerge {
                 }
             }
             sh.Merge(4, 1, 5, 1); sh.Merge(4, 2, 5, 2); for (int k = 0; k < names.Count; k++) sh.Merge(4, 3 + 2 * k, 4, 4 + 2 * k);
-            string who = M("who"), date = M("date"), cnt = M("cnt"), reportDate = Sheet(RdSummarySheet) + "$U$2";
+            string who = M("who"), date = M("date"), cnt = M("cnt"), lat = M("latest") + ",1,", reportDate = Sheet(RdSummarySheet) + "$U$2";
             int last = 6 + rd.Days.Count;
             Action<int, double?> counts = (r, day) => {
                 double sumElements = 0, sumSets = 0; bool gray = day.HasValue && (r - 7) % 2 == 1, bottom = r == last;
                 for (int k = 0; k < people.Count; k++) {
                     int c = 3 + 2 * k; string name = MergeEngine.ExcelColumn(c) + "$4", person = people[k];
                     double elements = rd.Elements.Count(e => Is(e.Who, person) && e.Date.HasValue && (day.HasValue ? e.Date == day : e.Date.Value > 0 && e.Date.Value <= report));
-                    double sets = rd.Sets.Count(s => Is(s.Who, person) && s.Date.HasValue && (day.HasValue ? s.Date == day : s.Date.Value <= report));
+                    double sets = rd.Sets.Count(s => s.Latest && Is(s.Who, person) && s.Date.HasValue && (day.HasValue ? s.Date == day : s.Date.Value <= report));
                     string[] when = day.HasValue ? new[] { E("P") + ",$B" + r, date + ",$B" + r } : new[] { E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + reportDate, date + ",\">0\"," + date + ",\"<=\"&" + reportDate };
                     sh.Set(r, c, elements, style(c, "thin", bottom ? "thick" : "thin", !day.HasValue || elements != 0, gray, "0", day.HasValue ? null : Green), "COUNTIFS(" + E("Q") + "," + name + "," + when[0] + ")");
-                    sh.Set(r, c + 1, sets, style(c + 1, "thin", bottom ? "thick" : "thin", !day.HasValue || sets != 0, gray, "0", day.HasValue ? null : Green), "COUNTIFS(" + who + "," + name + "," + when[1] + ")");
+                    sh.Set(r, c + 1, sets, style(c + 1, "thin", bottom ? "thick" : "thin", !day.HasValue || sets != 0, gray, "0", day.HasValue ? null : Green), "COUNTIFS(" + lat + who + "," + name + "," + when[1] + ")");
                     sumElements += elements; sumSets += sets;
                 }
                 int t = 3 + 2 * people.Count;
@@ -552,11 +543,11 @@ namespace ReviewMerge {
                 foreach (double? day in new double?[] { null }.Concat((worked ?? new SortedSet<double>()).Select(d => (double?)d))) {
                     string crit = day.HasValue ? ",$B" + row : ",\">0\"", n = "$B$" + personRow; bool bold = !day.HasValue;
                     Func<double?, bool> on = x => x.HasValue && (day.HasValue ? x == day : x.Value > 0);
-                    var whose = rd.Sets.Where(s => Is(s.Who, name) && on(s.Date)).ToList();
+                    var whose = rd.Sets.Where(s => s.Latest && Is(s.Who, name) && on(s.Date)).ToList();
                     sh.Set(row, 2, day.HasValue ? (object)day.Value : name, Rs(12, bold, fmt: day.HasValue ? "dd.mm.yyyy" : null, l: "thin", r: "thin", t: "thin", b: "thin"));
                     int number = Rs(12, bold, fmt: "0", l: "thin", r: "thin", t: "thin", b: "thin");
-                    sh.Set(row, 3, whose.Count, number, "COUNTIFS(" + who + "," + n + "," + date + crit + ")");
-                    sh.Set(row, 4, whose.Count(s => s.Cnt > 0), number, "COUNTIFS(" + who + "," + n + "," + date + crit + "," + cnt + ",\">0\")");
+                    sh.Set(row, 3, whose.Count, number, "COUNTIFS(" + lat + who + "," + n + "," + date + crit + ")");
+                    sh.Set(row, 4, whose.Count(s => s.Cnt > 0), number, "COUNTIFS(" + lat + who + "," + n + "," + date + crit + "," + cnt + ",\">0\")");
                     sh.Set(row, 5, rd.Elements.Count(e => Is(e.Who, name) && on(e.Date)), number, "COUNTIFS(" + E("Q") + "," + n + "," + E("P") + crit + ")");
                     sh.Set(row, 6, acts.Checks.Count(x => Is(x.Item1, name) && on(x.Item2)), number, acts.Exists ? "COUNTIFS(" + A(acts.Who) + "," + n + "," + A(acts.Date) + crit + ")" : null);
                     row++;
