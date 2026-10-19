@@ -151,4 +151,4 @@ for c in range(1, 23): m.cell(9, c, c)
 w.save(moved)
 assert build(moved)['Documents'] == 2
 assert remarks(moved) == ['Всего томов\nс замечаниями: 2', 'Устранено замечаний\nпо томам: 0', 'Устраняется томов\nс замечаниями: 2']
-print('Remarks summary tests passed: resolved column, merge from files, a mark in any part resolves the volume, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title, «Примечание» as a remark or a comment, moved numbers row not resolved')
+print('Remarks summary tests passed: resolved column, merge from files, a mark in any part resolves the volume, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title, notes as a remark or a comment, moved numbers row not resolved')

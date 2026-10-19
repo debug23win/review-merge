@@ -285,4 +285,4 @@ wrong = base_file(B / 'Чужая база.xlsx', updated, heading='Статус
 before = Path(based).read_bytes()
 refused = build(based, switches=['--rd-base=' + str(wrong)])
 assert 'error' in refused and 'не совпадает' in refused['error'] and Path(based).read_bytes() == before, refused
-print('RD tests passed: merge by set code, new sets after the data, statuses, «Примечание» as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, «Ведомость» from the base file')
+print('RD tests passed: merge by set code, new sets after the data, statuses, notes as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, stage list from the base file')
