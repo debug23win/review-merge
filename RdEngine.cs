@@ -17,7 +17,8 @@ namespace ReviewMerge {
         public string L(string key) { return MergeEngine.ExcelColumn(this[key]); }
         // Columns the program writes formulas into, and the columns of the reviewer.
         public static readonly string[] AutoKeys = { "ve", "te", "tedate", "teletter", "cnt", "status", "latest", "order", "elkey" };
-        public static readonly string[] Identity = { "el", "elname", "pd", "rd", "name", "rev", "section" };
+        // «Дата завершения проверки» is typed by the operator in the consolidated book: kept there, taken from the files only for new sets.
+        public static readonly string[] Identity = { "el", "elname", "pd", "rd", "name", "rev", "section", "deadline" };
         public static readonly string[] Review = { "who", "date", "text", "note", "smr", "fixed" };
         static readonly string[][] Heads = {
             new[] { "el", "Номер элемента" }, new[] { "elname", "Наименование элемента" }, new[] { "pd", "Шифр ПД" }, new[] { "rd", "Шифр РД" },
@@ -25,7 +26,8 @@ namespace ReviewMerge {
             new[] { "section", "Раздел" }, new[] { "ve", "Сверка с ВЭ РД" }, new[] { "te", "Согласование ТЭ" }, new[] { "tedate", "Дата ТЭ" },
             new[] { "teletter", "№ письма ТЭ" }, new[] { "who", "Проверил" }, new[] { "date", "Дата проверки" }, new[] { "text", "Замечания" },
             new[] { "note", "Примечание" }, new[] { "smr", "Факт СМР" }, new[] { "cnt", "Видов замечаний" }, new[] { "status", "Статус комплекта" },
-            new[] { "latest", "Действующая редакция" }, new[] { "order", "Порядковый № элемента" }, new[] { "elkey", "Элемент строки" } };
+            new[] { "latest", "Действующая редакция" }, new[] { "order", "Порядковый № элемента" }, new[] { "elkey", "Элемент строки" },
+            new[] { "deadline", "Дата завершения проверки" }, new[] { "deadline", "Срок завершения проверки" }, new[] { "priority", "Приоритет проверки" }, new[] { "priority", "Приоритет рассмотрения" } };
         public static readonly Dictionary<string, string> Names = Heads.GroupBy(h => h[0]).ToDictionary(g => g.Key, g => g.First()[1]);
         static string KeyOf(object header) {
             string h = XlsxReader.Normal(header);
@@ -76,6 +78,8 @@ namespace ReviewMerge {
         public string ElKey, Ve, Status, TeLetter;
         public object Te, TeDate;
         public int Cnt, Order;
+        // «Приоритет проверки»: 1 from 7 working days before «Дата завершения проверки», 2 before that; null without the date.
+        public int? Priority;
         public bool Latest;
         public double? Date;
         public string Who { get { return Rules.CleanName(this["who"]); } }
@@ -94,12 +98,27 @@ namespace ReviewMerge {
         public RawSheet Sheet;
         // Data rows, and the last row of the helper formulas AF:AH the build writes.
         public int First, Last, HelperLast;
+        // The rows of «База» written over the data of «Ведомость» (null when no base file is given).
+        public RdImport Import;
         public readonly Dictionary<string, int> CodeRow = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<int, string> Element = new Dictionary<int, string>();
         public readonly Dictionary<string, int> ElementRow = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, int> ElementSets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         public int Sets, Elements;
         public object At(int row, int col) { return Sheet.At(row, col); }
+    }
+    // The data of the stage list «База» (A–AE) moved to the rows of «Ведомость»: values, merges and heights; the rows the old data took are cleared.
+    public sealed class RdImport {
+        public const int Width = 31;
+        public string File;
+        public int OldLast, Header;
+        public readonly Dictionary<int, object[]> Rows = new Dictionary<int, object[]>(), OldRows = new Dictionary<int, object[]>();
+        public readonly List<int[]> Merges = new List<int[]>();
+        public readonly Dictionary<int, double> Heights = new Dictionary<int, double>();
+        // Headers of «База» for columns that «Ведомость» has no header for; columns with a date header.
+        public readonly Dictionary<int, string> NewHeaders = new Dictionary<int, string>();
+        public readonly HashSet<int> DateColumns = new HashSet<int>();
+        public int Added, Removed;
     }
     // «Проверка актов»: the result of the first act of every element and the checks by reviewer and date.
     public sealed class RdActs {
@@ -114,6 +133,9 @@ namespace ReviewMerge {
         public const string Expert = "ТЭ";
         public static readonly string[] Agreed = { "Да", "Согласовано", "Согласована" };
         public string MainName;
+        // «Примечание» counts as a remark (as a kind in «Видов замечаний»); the day the priorities are calculated for (TODAY() of Excel).
+        public bool NotesCount;
+        public double Today;
         public RdLayout Layout;
         public RawSheet Target;
         // The last row of the main sheet that gets formulas, and the last row of the formula ranges before the build.
@@ -173,7 +195,7 @@ namespace ReviewMerge {
             var layout = RdLayout.Detect(sheet);
             string file = Path.GetFileName(sheet.Path);
             if (layout == null) throw new InvalidDataException(file + ": на листе «" + name + "» нет шапки формы проверки РД — столбцов «Шифр РД» и «Проверил».");
-            var required = target ? RdLayout.Identity.Where(k => k != "pd" && k != "name" && k != "section").Concat(RdLayout.Review.Where(k => k != "smr")).Concat(RdLayout.AutoKeys) : new[] { "rd", "who", "date" };
+            var required = target ? RdLayout.Identity.Where(k => k != "pd" && k != "name" && k != "section" && k != "deadline").Concat(RdLayout.Review.Where(k => k != "smr")).Concat(RdLayout.AutoKeys) : new[] { "rd", "who", "date" };
             var missing = required.Where(k => layout[k] == 0).Select(k => "«" + (k == "fixed" ? Rules.ResolvedHeader : RdLayout.Names[k]) + "»").ToList();
             if (layout.Flags.Count == 0) missing.Add("видов замечаний П1…ПР");
             if (missing.Count > 0) throw new InvalidDataException(file + ": на листе «" + name + "» нет столбцов " + string.Join(", ", missing) + ". Нужна форма проверки РД (реестр комплектов).");
@@ -191,7 +213,7 @@ namespace ReviewMerge {
                 object[] values; // A copy: spellings unified by the merge must still differ from the sheet, so that the writer changes them.
                 if (!sheet.Rows.TryGetValue(r, out values)) values = new object[Width]; else values = (object[])values.Clone();
                 var row = new RdRow { File = sheet.Path, Row = r, Values = values, Layout = layout };
-                if (sheet.Date1904) foreach (string k in new[] { "date", "fixed" }) { int c = layout[k]; if (c > 0 && values[c - 1] is double && (double)values[c - 1] > 1000) values[c - 1] = (double)values[c - 1] + 1462; }
+                if (sheet.Date1904) foreach (string k in new[] { "date", "fixed", "deadline" }) { int c = layout[k]; if (c > 0 && values[c - 1] is double && (double)values[c - 1] > 1000) values[c - 1] = (double)values[c - 1] + 1462; }
                 string el = Txt(row["el"]), rd = Txt(row["rd"]);
                 // The row of column numbers moved among the data (e.g. by a sort in Excel) is not a set.
                 if (new[] { "el", "rd", "who" }.All(k => Txt(row[k]) == layout[k].ToString(Inv))) { numbers.Add(r); continue; }
@@ -201,14 +223,21 @@ namespace ReviewMerge {
             }
             return rows;
         }
-        static RdVed ReadVed(string path) {
+        // The header of a stage list: «Номер элемента» in A and «Шифр РД» in D in the top 15 rows; the data start under it and its row of column numbers.
+        static int VedHeader(RawSheet sheet) {
+            return sheet.Rows.Where(r => r.Key <= 15).Where(r => XlsxReader.Normal(r.Value[3]) == "ШИФР РД" && XlsxReader.Normal(r.Value[0]) == "НОМЕР ЭЛЕМЕНТА").Select(r => r.Key).FirstOrDefault();
+        }
+        static int VedFirst(RawSheet sheet, int header) {
+            return Txt(sheet.At(header + 1, 4)) == "4" && Txt(sheet.At(header + 1, 1)) == "1" ? header + 2 : header + 1;
+        }
+        static RdVed ReadVed(string path, string basePath, MergeResult result) {
             var sheet = Sheet(path, "Ведомость", true);
             var ved = new RdVed { Sheet = sheet };
-            var header = sheet.Rows.Where(r => r.Key <= 15).FirstOrDefault(r => XlsxReader.Normal(r.Value[3]) == "ШИФР РД" && XlsxReader.Normal(r.Value[0]) == "НОМЕР ЭЛЕМЕНТА");
-            if (header.Value == null) throw new InvalidDataException(Path.GetFileName(path) + ": на листе «Ведомость» нет шапки ведомости элементов РД («Номер элемента» в A, «Шифр РД» в D).");
-            ved.First = header.Key + 1;
-            if (Txt(sheet.At(ved.First, 4)) == "4" && Txt(sheet.At(ved.First, 1)) == "1") ved.First++;
+            int header = VedHeader(sheet);
+            if (header == 0) throw new InvalidDataException(Path.GetFileName(path) + ": на листе «Ведомость» нет шапки ведомости элементов РД («Номер элемента» в A, «Шифр РД» в D).");
+            ved.First = VedFirst(sheet, header);
             ved.Last = sheet.Rows.Where(r => r.Key >= ved.First && r.Value.Take(30).Any(v => Txt(v) != "")).Select(r => r.Key).DefaultIfEmpty(ved.First - 1).Max();
+            if (basePath != null) ImportBase(ved, header, basePath, result);
             string above = "";
             for (int r = ved.First; r <= ved.Last; r++) {
                 string el = Txt(sheet.At(r, 1)), code = Txt(sheet.At(r, 4));
@@ -221,6 +250,48 @@ namespace ReviewMerge {
                 }
             }
             return ved;
+        }
+        static string Letters(object header) { return Regex.Replace(XlsxReader.Normal(header).Replace('Ё', 'Е'), @"[^\p{L}\p{N}]", ""); }
+        // «База» of the stage list file replaces the data of «Ведомость» (columns A–AE) row for row; the header of «Ведомость» stays.
+        static void ImportBase(RdVed ved, int header, string basePath, MergeResult result) {
+            string name = Path.GetFileName(basePath);
+            if (!File.Exists(basePath)) throw new InvalidDataException("Не найден файл базы элементов: " + basePath);
+            if (string.Equals(Path.GetFullPath(basePath), Path.GetFullPath(ved.Sheet.Path), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Файл базы элементов — это сама сводная книга. Укажите файл этапа с листом «База».");
+            var source = XlsxReader.ReadSheet(basePath, "База", Width) ?? XlsxReader.ReadSheet(basePath, "Ведомость", Width);
+            if (source == null) throw new InvalidDataException(name + ": нет листа «База».");
+            int baseHeader = VedHeader(source);
+            if (baseHeader == 0) throw new InvalidDataException(name + ": на листе «База» нет шапки ведомости элементов РД («Номер элемента» в A, «Шифр РД» в D).");
+            int first = VedFirst(source, baseHeader), width = RdImport.Width;
+            // The data end at the last set (a code in D): the row of totals under the list is not copied.
+            int last = source.Rows.Where(r => r.Key >= first && Txt(r.Value[3]) != "").Select(r => r.Key).DefaultIfEmpty(0).Max();
+            if (last == 0) throw new InvalidDataException(name + ": на листе «База» нет комплектов (столбец D «Шифр РД»).");
+            var import = new RdImport { File = basePath, OldLast = ved.Last, Header = header };
+            for (int c = 1; c <= width; c++) {
+                object mine = ved.Sheet.At(header, c), theirs = source.At(baseHeader, c);
+                if (Letters(theirs) != "" && Letters(mine) != "" && Letters(theirs) != Letters(mine))
+                    throw new InvalidDataException(name + ": столбец " + MergeEngine.ExcelColumn(c) + " «База» («" + Txt(theirs) + "») не совпадает с листом «Ведомость» («" + Txt(mine) + "»). Сводная книга не изменена.");
+                if (Letters(theirs) == "" && Letters(mine) != "")
+                    throw new InvalidDataException(name + ": на листе «База» нет столбца " + MergeEngine.ExcelColumn(c) + " «" + Txt(mine) + "», который есть на листе «Ведомость». Сводная книга не изменена.");
+                if (Letters(mine) == "" && Letters(theirs) != "") import.NewHeaders[c] = Txt(theirs);
+                if (XlsxReader.Normal(Letters(theirs) != "" ? theirs : mine).StartsWith("ДАТА", StringComparison.Ordinal)) import.DateColumns.Add(c);
+            }
+            if (source.Rows.Where(r => r.Key >= first && r.Key <= last).Any(r => r.Value.Skip(width).Any(v => Txt(v) != "")))
+                result.Problems.Add(new Problem { File = basePath, Row = baseHeader, Document = "", Detail = "Столбцы «База» правее AE не переносятся: на листе «Ведомость» с AF начинаются служебные столбцы программы." });
+            int shift = ved.First - first;
+            var old = new HashSet<string>(Enumerable.Range(ved.First, Math.Max(0, ved.Last - ved.First + 1)).Select(r => Txt(ved.Sheet.At(r, 4))).Where(s => s != ""), StringComparer.OrdinalIgnoreCase);
+            foreach (int r in ved.Sheet.Rows.Keys.Where(k => k >= ved.First).ToList()) { import.OldRows[r] = ved.Sheet.Rows[r]; ved.Sheet.Rows.Remove(r); }
+            for (int r = first; r <= last; r++) {
+                object[] values; if (!source.Rows.TryGetValue(r, out values)) continue;
+                var row = new object[Width]; Array.Copy(values, row, width);
+                foreach (int c in import.DateColumns) if (source.Date1904 && row[c - 1] is double && (double)row[c - 1] > 1000) row[c - 1] = (double)row[c - 1] + 1462;
+                ved.Sheet.Rows[r + shift] = row; import.Rows[r + shift] = row;
+                double height; if (source.Heights.TryGetValue(r, out height)) import.Heights[r + shift] = height;
+            }
+            foreach (var m in source.Merges.Where(m => m[0] >= first && m[2] <= last && m[3] <= width)) import.Merges.Add(new[] { m[0] + shift, m[1], m[2] + shift, m[3] });
+            ved.Last = last + shift;
+            var now = new HashSet<string>(import.Rows.Values.Select(v => Txt(v[3])).Where(s => s != ""), StringComparer.OrdinalIgnoreCase);
+            import.Added = now.Count(c => !old.Contains(c)); import.Removed = old.Count(c => !now.Contains(c));
+            ved.Import = import;
         }
         static RdActs ReadActs(string path) {
             var acts = new RdActs(); var sheet = Sheet(path, acts.Name, false);
@@ -252,7 +323,7 @@ namespace ReviewMerge {
             return acts;
         }
         public static RdBook Collect(IList<string> sources, string sheetName, DateTime asOf, Action<int, string> progress, CancellationToken token, MergeOptions options, MergeResult result, DateTime importDate) {
-            var book = new RdBook { MainName = sheetName };
+            var book = new RdBook { MainName = sheetName, NotesCount = options.NotesCount, Today = importDate.Date.ToOADate() };
             var byKey = new Dictionary<string, RdSet>(StringComparer.Ordinal);
             var marks = new List<KeyValuePair<RdRow, string>>();
             var spelling = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -286,6 +357,8 @@ namespace ReviewMerge {
                     if (!byKey.TryGetValue(key, out set)) {
                         set = new RdSet { Key = key, IsNew = fi > 0, TargetRow = fi == 0 ? row : null, SheetRow = fi == 0 ? row.Row : 0, ElKey = row.ElKey };
                         foreach (string k in RdLayout.Identity) set[k] = row[k];
+                        // A date typed as text in «Дата завершения проверки» becomes a date, as the formula of the priority needs a number.
+                        double? due = XlsxReader.DateSerial(set["deadline"]); if (due.HasValue) set["deadline"] = due.Value;
                         if (Txt(set["el"]) == "") set["el"] = row.ElKey;
                         if (Txt(set["elname"]) == "") set["elname"] = row.ElName;
                         byKey[key] = set; book.Sets.Add(set);
@@ -308,7 +381,7 @@ namespace ReviewMerge {
                 }
                 if (toOne) result.ConvertedMarks.Add("«" + shown + "» → 1 (ячеек: " + cells.Count + ")");
             }
-            book.Ved = ReadVed(sources[0]);
+            book.Ved = ReadVed(sources[0], options.RdBase, result);
             foreach (var set in book.Sets) { Check(token); MergeSet(set, book.Layout, book.Ved, options, result, importDate); }
             Place(book);
             book.Acts = ReadActs(sources[0]);
@@ -433,8 +506,11 @@ namespace ReviewMerge {
                     set.Ve = string.Equals(element, set.ElKey, StringComparison.OrdinalIgnoreCase) ? "да" : "элемент " + element;
                     set.Te = ved.At(vr, 9) ?? (object)0.0; set.TeDate = Txt(ved.At(vr, 11)) == "" ? (object)"" : ved.At(vr, 11); set.TeLetter = Txt(ved.At(vr, 12));
                 }
-                set.Cnt = layout.Flags.Count(f => { object v = Flag(set[f]); return v is double && (double)v == 1; }) + (Txt(set["note"]) != "" ? 1 : 0);
+                set.Cnt = layout.Flags.Count(f => { object v = Flag(set[f]); return v is double && (double)v == 1; }) + (book.NotesCount && Txt(set["note"]) != "" ? 1 : 0);
                 set.Date = XlsxReader.DateSerial(set["date"]);
+                // As the formula: a number in «Дата завершения проверки» (a date), WORKDAY(date,-7) against TODAY().
+                object deadline = layout["deadline"] > 0 ? set["deadline"] : null; double? due = deadline is double ? (double?)Math.Floor((double)deadline) : null;
+                set.Priority = due.HasValue ? (int?)(book.Today >= Workday(due.Value, -7) ? 1 : 2) : null;
                 set.Status = set.Ve != "да" ? "не соответствует ВЭ РД" : set.Who == "" ? "не проверен" : set.Cnt > 0 && !Rules.IsResolved(set["fixed"]) ? "замечания" :
                     !RdBook.Agreed.Any(a => string.Equals(Txt(set.Te), a, StringComparison.OrdinalIgnoreCase)) ? "не согласован ТЭ" : "готово к ВПР";
             }
@@ -480,6 +556,12 @@ namespace ReviewMerge {
             for (double d = start; d <= report; d++) { var day = DateTime.FromOADate(d).DayOfWeek; if (day != DayOfWeek.Saturday && day != DayOfWeek.Sunday) days.Add(d); }
             book.Days.AddRange(days);
         }
+        // WORKDAY of Excel without holidays: the day the given number of working days (Monday–Friday) away.
+        public static double Workday(double start, int days) {
+            double d = start; int step = days < 0 ? -1 : 1;
+            for (int n = Math.Abs(days); n > 0; ) { d += step; var day = DateTime.FromOADate(d).DayOfWeek; if (day != DayOfWeek.Saturday && day != DayOfWeek.Sunday) n--; }
+            return d;
+        }
         static SortedSet<double> Activity(RdBook book, string who) {
             SortedSet<double> days; if (!book.Activity.TryGetValue(who, out days)) book.Activity[who] = days = new SortedSet<double>();
             return days;
@@ -497,6 +579,8 @@ namespace ReviewMerge {
             var book = Collect(sources, mainName, asOf, progress, token, options, result, DateTime.Today);
             if (options.CurrentDateForNewReviews) progress(42, "Текущая дата назначена новым проверкам: " + result.DatesAssignedToday + ". Даты уже внесённых проверок сохранены.");
             if (result.ExpertDates > 0) progress(43, "Проверкам ТЭ без даты подставлена дата письма ТЭ из «Ведомости»: " + result.ExpertDates + ".");
+            var import = book.Ved.Import;
+            if (import != null) progress(44, "«Ведомость» обновлена из базы «" + Path.GetFileName(import.File) + "»: комплектов " + book.Ved.Sets + ", элементов " + book.Ved.Elements + (import.Added + import.Removed > 0 ? "; новых шифров " + import.Added + ", исключено " + import.Removed : "; состав шифров не изменился") + ".");
             string temp = Path.Combine(Path.GetDirectoryName(output), "~merge-" + Guid.NewGuid().ToString("N") + ".xlsx");
             try {
                 Check(token); progress(45, "Запись комплектов и формул");

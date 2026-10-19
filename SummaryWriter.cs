@@ -140,7 +140,7 @@ namespace ReviewMerge {
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),INT("+date+"),\"\")");
                 string marks=MainCell(name,mainColumns.Letter(13),mr)+":"+mainColumns.Letter(18)+mr;
-                g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+marks+",1)>0,COUNTIF("+marks+",\"?*\")>0,"+MainCell(name,mainColumns.Letter(19),mr)+"<>\"\","+MainCell(name,mainColumns.Letter(20),mr)+"<>\"\"),1,0)");
+                g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+marks+",1)>0,COUNTIF("+marks+",\"?*\")>0,"+MainCell(name,mainColumns.Letter(19),mr)+"<>\"\""+(options.NotesCount?","+MainCell(name,mainColumns.Letter(20),mr)+"<>\"\"":"")+"),1,0)");
                 // A mark in «Замечания устранены» (anything but empty, 0 or «нет»); mirrors Rules.IsResolved.
                 string resolvedCell="TRIM("+(resolvedColumn>0?MainCell(name,MergeEngine.ExcelColumn(resolvedColumn),mr):"\"\"")+")";
                 g.Set(rn,h+49,resolvedColumn>0&&Rules.IsResolved(row.Resolved)?1:0,intStyle,"IF(OR("+resolvedCell+"=\"\","+resolvedCell+"=\"0\",UPPER("+resolvedCell+")=\"НЕТ\"),0,1)");
@@ -149,8 +149,8 @@ namespace ReviewMerge {
                 g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+rawRef+")>0,0,IF(MATCH("+rawRef+","+rawNames+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+25,0,intStyle,"IF(OR("+boxRef+"=\"\",LEN("+boxRef+")-LEN(SUBSTITUTE("+boxRef+",\";\",\"\"))<>2),0,IF(COUNTIF("+knownBoxes+","+boxRef+")>0,0,IF(MATCH("+boxRef+","+boxLists+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+28,volumeKeys[i],bodyStyle);
-                // A filled S or T field is one remark, however many items its text has.
-                for(int t=0;t<2;t++){string source=MainCell(name,mainColumns.Letter(19+t),mr);g.Set(rn,h+23+t,Text(row.Values[18+t])!=""?1:0,intStyle,"IF(LEN(TRIM("+source+"))>0,1,0)");}
+                // A filled S or T field is one remark, however many items its text has; T is not a remark when the option says so.
+                for(int t=0;t<2;t++){string source=MainCell(name,mainColumns.Letter(19+t),mr);bool remark=t==0||options.NotesCount;g.Set(rn,h+23+t,remark&&Text(row.Values[18+t])!=""?1:0,intStyle,remark?"IF(LEN(TRIM("+source+"))>0,1,0)":null);}
                 for(int t=0;t<6;t++)g.Set(rn,h+31+t,Text(row.Values[12+t])=="1"?1:0,intStyle,"IF(COUNTIF("+MainCell(name,mainColumns.Letter(13+t),mr)+",1)>0,1,0)");
                 g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+kind+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,"IF(TRIM("+who+")=\"\",\"\",TRIM("+who+"))");g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
             }
@@ -171,7 +171,7 @@ namespace ReviewMerge {
                 g.Set(rn,h+50,record.Resolved,intStyle,"IF(AND("+MergeEngine.ExcelColumn(vh+2)+rn+"=1,"+marked+"=1),1,0)");
                 // Every type counts once per volume: a mark M:R or a filled field S:T in any of its parts.
                 for(int t=0;t<8;t++) {
-                    int col=t<6?12+t:18+t-6;counts[t]=indices.Any(i=>t<6?Text(result.Rows[i].Values[col])=="1":Text(result.Rows[i].Values[col])!="")?1:0;
+                    int col=t<6?12+t:18+t-6;counts[t]=t==7&&!options.NotesCount?0:indices.Any(i=>t<6?Text(result.Rows[i].Values[col])=="1":Text(result.Rows[i].Values[col])!="")?1:0;
                     string f="MAX("+GroupCells(t<6?h+31+t:h+23+t-6,indices)+")";
                     if(f.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumeKeys[indices[0]]);
                     g.Set(rn,vh+3+t,counts[t],intStyle,f);
@@ -195,7 +195,7 @@ namespace ReviewMerge {
             g.Set(21,1,"Показатель",greenLabel);g.Set(22,1,"Файлов в реестре",label);g.Set(23,1,"Проверено файлов нарастающим итогом",greenLabel);g.Set(24,1,"Проверено томов (фрагменты и ИУЛ объединены)",greenLabel);g.Set(25,1,"Проверенных файлов с замечаниями",label);g.Set(26,1,"Проверенных томов с замечаниями",label);g.Set(27,1,"Впервые проверено файлов за сутки",label);g.Set(28,1,"Впервые проверено томов за сутки",label);
             g.Set(30,1,"КОЛИЧЕСТВО ЗАМЕЧАНИЙ ПО ТИПАМ",defaults[8]);g.Heights[30]=24;g.Set(31,1,"Тип замечания",greenLabel);
             for(int t=0;t<8;t++)g.Set(32+t,1,typeNames[t],label);g.Set(40,1,"Всего отметок и текстовых замечаний",greenLabel);g.Set(41,1,"Томов с любыми замечаниями",orangeLabel);
-            g.Set(42,1,"Замечания считаются по томам: отметка "+mainColumns.Marks+" или заполненное поле "+mainColumns.Notes+" в любой части тома — одно замечание этого типа. ИУЛ без основного файла томом не считается.",noteStyle);g.Heights[42]=32;
+            g.Set(42,1,"Замечания считаются по томам: отметка "+mainColumns.Marks+" или заполненное поле "+(options.NotesCount?mainColumns.Notes:mainColumns.Letter(19))+" в любой части тома — одно замечание этого типа. ИУЛ без основного файла томом не считается.",noteStyle);g.Heights[42]=32;
             for(int i=0;i<calendar.Count;i++) {
                 int c=i+2;double serial=calendar[i];string cs=MergeEngine.ExcelColumn(c),d=cs+"$5",criteria=",\">0\","+yr+",\"<=\"&"+d,vc=",\">0\","+vdr+",\"<=\"&"+d;bool future=serial>asOf.ToOADate();
                 g.Set(21,c,serial,StyleAt(previous,5,c,defaults[6]));g.Set(31,c,serial,StyleAt(previous,5,c,defaults[6]));

@@ -47,6 +47,9 @@ namespace ReviewMerge {
         public string Path;
         public bool Date1904;
         public readonly SortedDictionary<int, object[]> Rows = new SortedDictionary<int, object[]>();
+        // Merged ranges as first row, first column, last row, last column; custom row heights.
+        public readonly List<int[]> Merges = new List<int[]>();
+        public readonly Dictionary<int, double> Heights = new Dictionary<int, double>();
         public object At(int row, int col) { object[] v; return col >= 1 && Rows.TryGetValue(row, out v) && col <= v.Length ? v[col - 1] : null; }
     }
     public static class XlsxReader {
@@ -158,6 +161,11 @@ namespace ReviewMerge {
                         if (col >= 1 && col <= width) values[col - 1] = RawValue(cell, strings);
                     }
                     result.Rows[rn] = values;
+                    double height; string custom = (string)xmlRow.Attribute("customHeight"); if ((custom == "1" || custom == "true") && double.TryParse((string)xmlRow.Attribute("ht"), NumberStyles.Float, Inv, out height)) result.Heights[rn] = height;
+                }
+                foreach (var merge in data.Descendants(Ns + "mergeCell")) {
+                    var m = Regex.Match((string)merge.Attribute("ref") ?? "", @"^([A-Z]+)(\d+):([A-Z]+)(\d+)$");
+                    if (m.Success) result.Merges.Add(new[] { int.Parse(m.Groups[2].Value, Inv), Column(m.Groups[1].Value), int.Parse(m.Groups[4].Value, Inv), Column(m.Groups[3].Value) });
                 }
                 return result;
             }

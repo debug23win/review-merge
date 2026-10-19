@@ -1,6 +1,6 @@
 """Working documentation (--rd): the RD check sheet «Проверка комплектов» merged from reviewers' copies; artificial data only."""
-import json, subprocess, uuid
-from datetime import datetime
+import json, shutil, subprocess, uuid
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from openpyxl import Workbook, load_workbook
 
@@ -13,7 +13,10 @@ FLAGS = ['П1', 'П2', 'П3', 'П4', 'П5', 'П6', 'Э1', 'Э2', 'Э3', 'Э4', '
 HEADS = ['Номер элемента', 'Наименование элемента', 'Шифр ПД', 'Шифр РД', 'Наименование комплекта', 'Изм.', 'Раздел', 'Сверка с ВЭ РД', 'Согласование ТЭ', 'Дата ТЭ', '№ письма ТЭ',
          'Проверил', 'Дата проверки'] + [f + '. вид замечания' for f in FLAGS] + ['Замечания (текст для письма подрядчику)', 'Примечание', 'Факт СМР', 'Видов замечаний', 'Замечания устранены',
          'Статус комплекта', 'Действующая редакция', 'Порядковый № элемента', 'Элемент строки']
-COL = {h.split('.')[0] if h[:2] in FLAGS else h: i for i, h in enumerate(HEADS, 1)}
+columns = lambda heads: {h.split('.')[0] if h[:2] in FLAGS else h: i for i, h in enumerate(heads, 1)}
+COL = columns(HEADS)
+# The form with the deadline typed by the operator and the priority after «Дата проверки», as columns N and O of the stage 7 book.
+HEADS_DUE = HEADS[:13] + ['Дата завершения проверки', 'Приоритет проверки '] + HEADS[13:]
 # The stage list: element, name, sets with the status of ТЭ.
 STAGE = [('1.1', 'Мост', [('К1', 'Да'), ('К2', 'Да'), ('К3', 'Замечания')]), ('1.2', 'Труба', [('Т1', 'Да'), ('Т2', 'Да')]), ('1.3', 'Дорога', [('Д1', 'Да')])]
 NAME = {el: name for el, name, _ in STAGE}
@@ -21,14 +24,14 @@ LETTER = {'К3': datetime(2026, 10, 6)}  # the date of the letter of ТЭ («Д�
 D = lambda day: datetime(2026, 10, day)
 
 
-def form(path, rows, stage=True, acts=(), formula_rows=0, extra=None):
+def form(path, rows, stage=True, acts=(), formula_rows=0, extra=None, heads=HEADS):
     """An RD check book: the check sheet (header in row 5, column numbers in row 6, data from row 7), «Ведомость» and «Проверка актов»."""
-    wb = Workbook(); m = wb.active; m.title = MAIN
+    wb = Workbook(); m = wb.active; m.title = MAIN; col = columns(heads)
     m['A1'] = 'Форма проверки рабочей документации'; m['A2'] = '9 этап – «Испытательный участок»'
-    for c, h in enumerate(HEADS, 1): m.cell(5, c, h); m.cell(6, c, c)
+    for c, h in enumerate(heads, 1): m.cell(5, c, h); m.cell(6, c, c)
     for r, row in enumerate(rows, 7):
-        for key, value in row.items(): m.cell(r, COL[key], value)
-    for r in range(7, 7 + formula_rows): m.cell(r, COL['Статус комплекта'], '=""')  # the formula rows a form has prepared
+        for key, value in row.items(): m.cell(r, col[key], value)
+    for r in range(7, 7 + formula_rows): m.cell(r, col['Статус комплекта'], '=""')  # the formula rows a form has prepared
     if stage:
         v = wb.create_sheet('Ведомость')
         for c, h in {1: 'Номер элемента', 2: 'Наименование элемента', 3: 'Шифр ПД', 4: 'Шифр РД', 5: 'Наименование документации', 9: 'Статус комплекта'}.items(): v.cell(5, c, h)
@@ -50,12 +53,12 @@ def form(path, rows, stage=True, acts=(), formula_rows=0, extra=None):
 def row(code, el=None, **values):
     data = {'Шифр РД': code}
     if el: data.update({'Номер элемента': el, 'Наименование элемента': NAME[el]})
-    data.update({{'who': 'Проверил', 'date': 'Дата проверки', 'text': 'Замечания (текст для письма подрядчику)', 'note': 'Примечание', 'fixed': 'Замечания устранены', 'rev': 'Изм.'}.get(k, k): v for k, v in values.items()})
+    data.update({{'who': 'Проверил', 'date': 'Дата проверки', 'text': 'Замечания (текст для письма подрядчику)', 'note': 'Примечание', 'fixed': 'Замечания устранены', 'rev': 'Изм.', 'due': 'Дата завершения проверки'}.get(k, k): v for k, v in values.items()})
     return data
 
 
-def build(output, *sources, day='2026-10-08'):
-    result = subprocess.run([str(EXE), '--batch', str(output), day, MAIN, *map(str, sources), '--rd'], timeout=300)
+def build(output, *sources, day='2026-10-08', switches=()):
+    result = subprocess.run([str(EXE), '--batch', str(output), day, MAIN, *map(str, sources), '--rd', *switches], timeout=300)
     error = Path(str(output) + '.error.txt')
     if error.exists(): return {'error': error.read_text(encoding='utf-8-sig')}
     assert result.returncode == 0
@@ -116,7 +119,9 @@ assert get('К2', 'Замечания устранены') == D(7) and get('К2'
 # The Technical expert however written is «ТЭ», a reviewer like the others, dated by the letter of ТЭ when the row has no date.
 assert (get('К3', 'Проверил'), get('К3', 'Дата проверки')) == ('ТЭ', D(6)), (get('К3', 'Проверил'), get('К3', 'Дата проверки'))
 status = {c: mv.cell(r, COL['Статус комплекта']).value for c, r in codes.items()}
-assert status == {'К1': 'готово к ВПР', 'К2': 'готово к ВПР', 'К3': 'замечания', 'Т1': 'готово к ВПР', 'Т2': 'замечания', 'Д1': 'замечания'}, status
+# «Примечание» is a comment in RD by default: Д1 with a note is ready, «Видов замечаний» counts the flags only.
+assert status == {'К1': 'готово к ВПР', 'К2': 'готово к ВПР', 'К3': 'замечания', 'Т1': 'готово к ВПР', 'Т2': 'замечания', 'Д1': 'готово к ВПР'}, status
+assert mv.cell(codes['Д1'], COL['Видов замечаний']).value == 0 and 'TRIM(' not in m.cell(7, COL['Видов замечаний']).value, m.cell(7, COL['Видов замечаний']).value
 assert all(str(m.cell(r, COL[k]).value).startswith('=') for r in range(7, 7 + 6 + 50) for k in ('Сверка с ВЭ РД', 'Статус комплекта', 'Действующая редакция', 'Элемент строки'))
 assert '$D$7:$D$62' in m.cell(7, COL['Действующая редакция']).value, m.cell(7, COL['Действующая редакция']).value
 
@@ -125,13 +130,13 @@ e, ev = wb['Элементы'], cached['Элементы']
 val = lambda x: '' if x is None else x
 elements = {ev.cell(r, 1).value: [val(ev.cell(r, c).value) for c in (4, 5, 8, 9, 11, 12, 13, 16, 17, 18)] for r in range(6, 9)}
 assert elements == {'1.1': [3, 3, 3, 1, 2, 'замечания', 'не поступал', D(6), 'ТЭ', 1], '1.2': [2, 2, 2, 1, 1, 'замечания', 'замечания', D(7), 'Вера', 0],
-                    '1.3': [1, 1, 1, 1, 0, 'замечания', 'не поступал', D(7), 'Вера', 0]}, elements
+                    '1.3': [1, 1, 1, 0, 1, 'готов к ВПР', 'не поступал', D(7), 'Вера', 0]}, elements
 assert e['A6'].value.startswith('=IFERROR(INDEX(') and ev['A9'].value in (None, '')
 
 # «СВОД»: days from the first check (working days and the report date), the reviewers under the last day, ТЭ last; no line of ТЭ under the table.
 s, sv = wb['СВОД'], cached['СВОД']
 assert sv['U2'].value == D(8) and sv['A8'].value == 'Этап 9', (sv['U2'].value, sv['A8'].value)
-assert sv['D4'].value == 'Всего комплектов\nс замечаниями: 4' and sv['H4'].value == 'Устранено замечаний\nпо комплектам: 1' and sv['L4'].value == 'Устраняется комплектов\nс замечаниями: 3', (sv['D4'].value, sv['H4'].value, sv['L4'].value)
+assert sv['D4'].value == 'Всего комплектов\nс замечаниями: 3' and sv['H4'].value == 'Устранено замечаний\nпо комплектам: 1' and sv['L4'].value == 'Устраняется комплектов\nс замечаниями: 2', (sv['D4'].value, sv['H4'].value, sv['L4'].value)
 days = [r for r in range(8, s.max_row + 1) if isinstance(sv.cell(r, 2).value, datetime)]
 assert [sv.cell(r, 2).value for r in days] == [D(5), D(6), D(7), D(8)], [sv.cell(r, 2).value for r in days]
 assert [[sv.cell(r, c).value for c in (4, 6, 8, 10, 12, 14, 16, 18)] for r in days] == [[3, 6, 0, 2, 3, 4, 0, 2], [3, 6, 1, 4, 2, 2, 1, 2], [3, 6, 3, 6, 0, 0, 2, 2], [3, 6, 3, 6, 0, 0, 0, 0]]
@@ -154,8 +159,20 @@ assert '$A$1:$S$' in s.print_area and '$A$1:$L$10' in t.print_area, (s.print_are
 # «Статистика»: sets of the stage list, presented, checked, statuses.
 st = cached['Статистика']
 stats = {st.cell(r, 1).value: st.cell(r, 2).value for r in range(6, st.max_row + 1) if st.cell(r, 1).value}
-assert (stats['В ведомости элементов РД (ВЭ РД)'], stats['Представлено на проверку (действующие редакции из ВЭ РД)'], stats['Проверено по состоянию на дату отчёта (как в «СВОД»)'], stats['Готово к ВПР'], stats['Замечания ТЭ («Проверил: ТЭ»)']) == (6, 6, 6, 3, 1), stats
+assert (stats['В ведомости элементов РД (ВЭ РД)'], stats['Представлено на проверку (действующие редакции из ВЭ РД)'], stats['Проверено по состоянию на дату отчёта (как в «СВОД»)'], stats['Готово к ВПР'], stats['Замечания ТЭ («Проверил: ТЭ»)']) == (6, 6, 6, 4, 1), stats
+assert 'Примечание (текст в столбце «Примечание»)' not in stats, 'a comment is not a kind of remark'
 assert_sums(target)
+
+# --notes-as-remarks: the note is a kind of remark, as in PD.
+noted = form(B / 'Примечание.xlsx', [row('К1', '1.1', who='Анна', date=D(5))])
+assert 'error' not in build(noted, vera, switches=['--notes-as-remarks'])
+nm, nv = load_workbook(noted)[MAIN], load_workbook(noted, data_only=True)[MAIN]
+d1 = next(r for r in range(7, nm.max_row + 1) if nm.cell(r, COL['Шифр РД']).value == 'Д1')
+assert (nv.cell(d1, COL['Статус комплекта']).value, nv.cell(d1, COL['Видов замечаний']).value) == ('замечания', 1) and 'TRIM($' in nm.cell(7, COL['Видов замечаний']).value
+nst = load_workbook(noted, data_only=True)['Статистика']
+assert any(nst.cell(r, 1).value == 'Примечание (текст в столбце «Примечание»)' and nst.cell(r, 2).value == 1 for r in range(6, nst.max_row + 1))
+assert load_workbook(noted, data_only=True)['СВОД']['D4'].value == 'Всего комплектов\nс замечаниями: 2'
+assert_sums(noted)
 
 # The same files again change nothing; a build without files recalculates the reports from the book.
 before = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги проверки', 'Элементы') for r in load_workbook(target, data_only=True)[n].iter_rows() for c in r}
@@ -205,4 +222,67 @@ assert 'error' in refused and 'номерами столбцов' in refused['er
 bare = form(B / 'Без ведомости.xlsx', [row('К1', '1.1', who='Анна', date=D(5))], stage=False)
 failed = build(bare, boris)
 assert 'error' in failed and 'Ведомость' in failed['error'], failed
-print('RD tests passed: merge by set code, new sets after the data, statuses, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list')
+# «Приоритет проверки»: 1 within the last 7 working days before «Дата завершения проверки» (and after it), 2 before them; against today, as TODAY().
+def workday(day, n):
+    while n:
+        day -= timedelta(days=1)
+        if day.weekday() < 5: n -= 1
+    return day
+today = date.today()
+dt = lambda d: datetime(d.year, d.month, d.day)
+due = {'К1': today + timedelta(days=30), 'К2': today + timedelta(days=3), 'К3': today - timedelta(days=10), 'Т1': today + timedelta(days=30)}
+expected = {k: 1 if today >= workday(d, 7) else 2 for k, d in due.items()}
+assert expected == {'К1': 2, 'К2': 1, 'К3': 1, 'Т1': 2}, expected
+DUE = columns(HEADS_DUE)
+deadline = form(B / 'Приоритет.xlsx', [row('К1', '1.1', who='Анна', date=D(5), due=dt(due['К1'])), row('К2', due=dt(due['К2'])), row('К3', due=dt(due['К3'])),
+                                       row('Т1', '1.2', due=due['Т1'].strftime('%d.%m.%Y')), row('Т2')], heads=HEADS_DUE)
+w = load_workbook(deadline); w[MAIN].cell(3, DUE['Дата проверки'], 'дд.мм.гггг'); w.save(deadline)
+copy_due = form(B / 'Срок в копии.xlsx', [row('К1', '1.1', who='Анна', date=D(5), due=dt(today)), row('Д1', '1.3', who='Вера', date=D(7), due=dt(due['К2']))], heads=HEADS_DUE)
+for _ in range(2): assert 'error' not in build(deadline, copy_due)
+pm, pv = load_workbook(deadline)[MAIN], load_workbook(deadline, data_only=True)[MAIN]
+rows_due = {pm.cell(r, DUE['Шифр РД']).value: r for r in range(7, pm.max_row + 1) if pm.cell(r, DUE['Шифр РД']).value}
+priority = {k: pv.cell(r, DUE['Приоритет проверки ']).value for k, r in rows_due.items()}
+assert priority == {**expected, 'Т2': None, 'Д1': 1}, priority
+# The deadline of the consolidated book stays; a new set takes it from the file; a date typed as text becomes a date.
+assert pv.cell(rows_due['К1'], DUE['Дата завершения проверки']).value == dt(due['К1']) and pv.cell(rows_due['Т1'], DUE['Дата завершения проверки']).value == dt(due['Т1'])
+assert pv.cell(rows_due['Д1'], DUE['Дата завершения проверки']).value == dt(due['К2'])
+formula = pm.cell(7, DUE['Приоритет проверки ']).value
+assert formula == '=IF($D7="","",IF(ISNUMBER($N7),IFERROR(IF(TODAY()>=WORKDAY($N7,-7),1,2),""),""))', formula
+assert pv.cell(rows_due['К2'], DUE['Статус комплекта']).value == 'не проверен' and pv.cell(rows_due['К1'], DUE['Статус комплекта']).value == 'готово к ВПР'
+rules = [(str(cf.sqref), rule.operator, rule.formula) for cf in pm.conditional_formatting for rule in cf.rules]
+assert rules.count(('O7:O%d' % (rows_due['Д1'] + 50), 'equal', ['1'])) == 1, rules
+assert (pm.cell(3, DUE['Дата завершения проверки']).value, pm.cell(3, DUE['Приоритет проверки ']).value) == ('дд.мм.гггг', 'автоматически')
+assert_sums(deadline)
+
+# «База элементов»: the stage list file updates «Ведомость» (A–AE) at every build; the totals under the list are not copied.
+def base_file(path, sets, heading='Статус комплекта'):
+    wb = Workbook(); ws = wb.active; ws.title = 'База'
+    for c, h in {1: 'Номер элемента', 2: 'Наименование элемента', 3: 'Шифр ПД', 4: 'Шифр РД', 5: 'Наименование документации', 9: heading, 11: 'Дата', 31: '№'}.items(): ws.cell(3, c, h)
+    for c in range(1, 32): ws.cell(4, c, c)
+    r = 5
+    for el, name, items in sets:
+        for k, (code, te) in enumerate(items):
+            if k == 0: ws.cell(r, 1, el); ws.cell(r, 2, name)
+            ws.cell(r, 4, code); ws.cell(r, 5, 'Комплект ' + code); ws.cell(r, 9, te); ws.cell(r, 31, 'В-%d' % r); r += 1
+        if len(items) > 1: ws.merge_cells('A%d:A%d' % (r - len(items), r - 1))
+    ws.cell(r, 1, '=COUNTA(A5:A%d)' % (r - 1)); ws.cell(r, 4, None)
+    wb.save(path); return path
+updated = [('1.1', 'Мост', [('К1', 'Да'), ('К2', 'Да'), ('К3', 'Да'), ('К4', 'Да')]), ('1.2', 'Труба', [('Т1', 'Да'), ('Т2', 'Да')])]
+stage = base_file(B / 'Этап 9 база.xlsx', updated)
+based = form(B / 'С базой.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('К3', who='Анна', date=D(5)), row('Д1', '1.3', who='Вера', date=D(7))])
+report = build(based, switches=['--rd-base=' + str(stage)])
+assert 'error' not in report and any('«Ведомость» обновлена из базы «Этап 9 база.xlsx»: комплектов 6, элементов 2; новых шифров 1, исключено 1' in s for s in report['Log']), report.get('Log', report)
+bw, bv = load_workbook(based), load_workbook(based, data_only=True)
+ved = bw['Ведомость']
+assert [ved.cell(r, 4).value for r in range(7, 14)] == ['К1', 'К2', 'К3', 'К4', 'Т1', 'Т2', None], [ved.cell(r, 4).value for r in range(7, 14)]
+assert ved.cell(13, 1).value is None and ved.cell(5, 31).value == '№' and ved.cell(7, 31).value == 'В-5' and 'A7:A10' in {str(x) for x in ved.merged_cells.ranges}
+bm = bv[MAIN]; brows = {bm.cell(r, COL['Шифр РД']).value: r for r in range(7, bm.max_row + 1) if bm.cell(r, COL['Шифр РД']).value}
+assert bm.cell(brows['К3'], COL['Согласование ТЭ']).value == 'Да' and bm.cell(brows['Д1'], COL['Сверка с ВЭ РД']).value == 'нет в ВЭ РД'
+el = bv['Элементы']; assert [el.cell(6, c).value for c in (1, 4, 5)] == ['1.1', 4, 2], [el.cell(6, c).value for c in (1, 4, 5)]
+assert_sums(based)
+# A base whose columns differ from «Ведомость» is refused; the book does not change.
+wrong = base_file(B / 'Чужая база.xlsx', updated, heading='Статус элемента')
+before = Path(based).read_bytes()
+refused = build(based, switches=['--rd-base=' + str(wrong)])
+assert 'error' in refused and 'не совпадает' in refused['error'] and Path(based).read_bytes() == before, refused
+print('RD tests passed: merge by set code, new sets after the data, statuses, «Примечание» as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, «Ведомость» from the base file')

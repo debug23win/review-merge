@@ -126,4 +126,29 @@ work = load_workbook(output)['Итоги работы']
 assert not any(str(x).startswith('A1:') for x in work.merged_cells.ranges) and work['A1'].alignment.horizontal == 'left'
 report = json.loads(Path(str(output) + '.run.json').read_text(encoding='utf-8-sig'))
 assert report['PdfError'] is None and Path(report['Pdf']).exists(), report
-print('Remarks summary tests passed: resolved column, merge from files, a mark in any part resolves the volume, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title')
+
+# «Примечание» is a remark in PD by default; --notes-not-remarks makes it a comment: no remark, no type, no volume with remarks.
+notes = [{3: 'Том 7', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 20: 'выдан ранее'}, {3: 'Том 8', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 13: 1}]
+counted = book(B / 'notes-on.xlsx', notes)
+assert build(counted)['WithIssues'] == 2
+assert remarks(counted)[0] == 'Всего томов\nс замечаниями: 2'
+comment = book(B / 'notes-off.xlsx', notes)
+assert build(comment, '--notes-not-remarks')['WithIssues'] == 1
+assert remarks(comment)[0] == 'Всего томов\nс замечаниями: 1'
+types = load_workbook(comment, data_only=True)['Стат. по типам']
+head = next(c for c in range(1, types.max_column + 1) if types.cell(4, c).value == 'Дополнительные текстовые замечания')
+assert all(types.cell(r, head).value in (0, None, '') for r in range(6, types.max_row + 1)), 'no type for a comment'
+reference = load_workbook(comment)['Справка по томам']
+heads = {reference.cell(6, c).value: c for c in range(1, reference.max_column + 1) if reference.cell(6, c).value}
+issue = reference.cell(7, heads['Есть замечания']).value
+assert "'Все загруженные файлы'!T7<>\"\"" in issue and "!U7" not in issue, issue
+
+# The row of column numbers moved among the data by a sort has 22 in «Замечания устранены»: it is neither a volume with remarks nor resolved.
+moved = book(B / 'numbers.xlsx', documents[:2]); build(moved)
+w = load_workbook(moved); m = w[MAIN]
+assert m['V5'].value == 'Замечания устранены'
+for c in range(1, 23): m.cell(9, c, c)
+w.save(moved)
+assert build(moved)['Documents'] == 2
+assert remarks(moved) == ['Всего томов\nс замечаниями: 2', 'Устранено замечаний\nпо томам: 0', 'Устраняется томов\nс замечаниями: 2']
+print('Remarks summary tests passed: resolved column, merge from files, a mark in any part resolves the volume, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title, «Примечание» as a remark or a comment, moved numbers row not resolved')

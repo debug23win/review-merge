@@ -179,7 +179,7 @@ namespace ReviewMerge {
                     int col = layout[k]; if (col == 0) continue;
                     object value = set[k], before = rd.Target.At(rn, col); bool date = false;
                     if (k == "rev" && value is string) { double n; if (double.TryParse(((string)value).Replace(',', '.'), NumberStyles.Float, Inv, out n)) value = n; }
-                    if (k == "date" || k == "fixed") {
+                    if (k == "date" || k == "fixed" || k == "deadline") {
                         double? d = XlsxReader.DateSerial(value);
                         if (d.HasValue) { value = d.Value; date = true; }
                         else if (value is string) { double n; if (double.TryParse((string)value, NumberStyles.Float, Inv, out n)) value = n; }
@@ -190,6 +190,9 @@ namespace ReviewMerge {
                     put(row, rn, col, Text(value) == "" ? null : value, null, date);
                 }
                 if (notes) { int lines = Math.Max(Text(set["text"]).Split('\n').Length, Text(set["note"]).Split('\n').Length); row.SetAttributeValue("ht", Math.Min(120, Math.Max(30, lines * 15))); row.SetAttributeValue("customHeight", 1); }
+                // A deadline typed as text in the consolidated book is written as a date.
+                int due = layout["deadline"];
+                if (!set.IsNew && due > 0 && rd.Target.At(rn, due) is string && set["deadline"] is double) put(row, rn, due, set["deadline"], null, true);
             }
             var byRow = rd.Sets.ToDictionary(s => s.SheetRow);
             for (int r = layout.First; r <= rd.Last; r++) {
@@ -205,7 +208,10 @@ namespace ReviewMerge {
                 put(row, r, layout["latest"], set == null ? "" : (object)(set.Latest ? 1.0 : 0.0), f["latest"], false);
                 put(row, r, layout["order"], first ? (object)(double)order : "", f["order"], false);
                 put(row, r, layout["elkey"], elkey ?? "", f["elkey"], false);
+                if (layout["priority"] > 0 && layout["deadline"] > 0) put(row, r, layout["priority"], set == null || !set.Priority.HasValue ? "" : (object)(double)set.Priority.Value, f["priority"], false);
             }
+            Hints(main, rowAt);
+            if (layout["priority"] > 0 && layout["deadline"] > 0) PriorityRule(main);
             foreach (var row in data.Elements(N + "row")) { var sorted = row.Elements(N + "c").OrderBy(e => Column((string)e.Attribute("r"))).ToList(); sorted.Remove(); row.Add(sorted); }
             // Validation lists, conditional formatting and the filter of the form reach the new last row.
             if (rd.Last > rd.OldLast) {
@@ -218,6 +224,36 @@ namespace ReviewMerge {
             int maxCol = data.Elements(N + "row").Elements(N + "c").Select(e => Column((string)e.Attribute("r"))).DefaultIfEmpty(1).Max(), maxRow = rows.Keys.DefaultIfEmpty(1).Max();
             var dimension = main.Root.Element(N + "dimension"); if (dimension != null) dimension.SetAttributeValue("ref", "A1:" + MergeEngine.ExcelColumn(maxCol) + maxRow);
             Store(mainPath, main);
+        }
+        // The red hints over the header of the form: «Примечание» and «Видов замечаний» follow the option; the deadline and the priority get theirs when empty.
+        static readonly string[][] NoteHints = { new[] { "тоже замечание: не готово к ВПР", "комментарий, не замечание" }, new[] { "флажки и примечание", "флажки" } };
+        void Hints(XDocument main, Func<int, XElement> rowAt) {
+            var l = rd.Layout; int hint = l.Header - 2; if (hint < 1) return;
+            Action<string, string, string[]> set = (key, text, known) => {
+                int col = l[key]; if (col == 0) return;
+                var cell = At(main, hint, col); string now = Text(Value(cell));
+                if (now == text || (known == null ? now != "" : !known.Contains(now))) return;
+                int style = cell != null ? (int?)cell.Attribute("s") ?? 0 : StyleAt(main, hint, l["date"], bodyStyle);
+                var row = rowAt(hint); SetCell(row, Cell(hint, col, text, style));
+                var sorted = row.Elements(N + "c").OrderBy(e => Column((string)e.Attribute("r"))).ToList(); sorted.Remove(); row.Add(sorted);
+            };
+            int on = rd.NotesCount ? 0 : 1;
+            set("note", NoteHints[0][on], NoteHints[0]); set("cnt", NoteHints[1][on], NoteHints[1]);
+            // Only a form with a hint over «Дата проверки» has a row of hints.
+            if (Text(Value(At(main, hint, l["date"]))) != "") { set("deadline", "дд.мм.гггг", null); set("priority", "автоматически", null); }
+        }
+        // Priority 1 is red, as the remarks of «Элементы», unless the column already has conditional formatting.
+        void PriorityRule(XDocument main) {
+            var l = rd.Layout; string col = l.L("priority");
+            var formats = main.Root.Elements(N + "conditionalFormatting").ToList();
+            if (formats.Any(e => ((string)e.Attribute("sqref") ?? "").Split(' ').Any(r => Regex.IsMatch(r, "^" + col + @"\d")))) return;
+            int priority = main.Root.Descendants(N + "cfRule").Select(e => (int?)e.Attribute("priority") ?? 0).DefaultIfEmpty(0).Max() + 1;
+            var rule = new XElement(N + "conditionalFormatting", new XAttribute("sqref", col + l.First + ":" + col + rd.Last),
+                new XElement(N + "cfRule", new XAttribute("type", "cellIs"), new XAttribute("dxfId", RdDxf("FF9C0006", true, "FFFFC7CE")), new XAttribute("priority", priority), new XAttribute("operator", "equal"), new XElement(N + "formula", "1")));
+            if (formats.Count > 0) { formats.Last().AddAfterSelf(rule); return; }
+            string[] after = { "dataValidations", "hyperlinks", "printOptions", "pageMargins", "pageSetup", "headerFooter", "rowBreaks", "colBreaks", "customProperties", "cellWatches", "ignoredErrors", "smartTags", "drawing", "legacyDrawing", "legacyDrawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst" };
+            var next = main.Root.Elements().FirstOrDefault(e => after.Contains(e.Name.LocalName));
+            if (next != null) next.AddBeforeSelf(rule); else main.Root.Add(rule);
         }
         // The formulas of the grey columns of the form (the same as in the form the program was made for).
         Dictionary<string, string> RdFormulas(int r) {
@@ -234,15 +270,19 @@ namespace ReviewMerge {
                 { "te", empty + "IFERROR(INDEX(" + v + "$I:$I," + found + "),\"—\"))" },
                 { "tedate", empty + "IFERROR(IF(INDEX(" + v + "$K:$K," + found + ")=\"\",\"\",INDEX(" + v + "$K:$K," + found + ")),\"\"))" },
                 { "teletter", empty + "IFERROR(INDEX(" + v + "$L:$L," + found + ")&\"\",\"\"))" },
-                { "cnt", empty + "COUNTIF(" + flags + ",1)+IF(TRIM(" + c("note") + "&\"\")<>\"\",1,0))" },
+                { "cnt", empty + "COUNTIF(" + flags + ",1)" + (rd.NotesCount ? "+IF(TRIM(" + c("note") + "&\"\")<>\"\",1,0)" : "") + ")" },
                 { "status", empty + "IF(" + c("ve") + "<>\"да\",\"не соответствует ВЭ РД\",IF(" + c("who") + "=\"\",\"не проверен\",IF(AND(" + c("cnt") + ">0," + unresolved + "),\"замечания\",IF(NOT(" + agreed + "),\"не согласован ТЭ\",\"готово к ВПР\")))))" },
                 { "latest", empty + "IF(COUNTIFS(" + range("rd") + "," + c("rd") + "," + range("rev") + ",\">\"&N(" + c("rev") + "))=0,1,0))" },
-                { "order", "IF(" + c("elkey") + "=\"\",\"\",IF(COUNTIF($" + l.L("elkey") + "$" + l.First + ":" + c("elkey") + "," + c("elkey") + ")=1,MAX($" + l.L("order") + "$" + (l.First - 1) + ":$" + l.L("order") + (r - 1) + ")+1,\"\"))" },
-                { "elkey", "IF(TRIM(" + c("el") + "&\"\")<>\"\",TRIM(" + c("el") + "&\"\"),IF(" + c("rd") + "=\"\",\"\"," + above + "))" } };
+                // The numbers start at 1 in the first data row: the row of column numbers above may hold a number in this column.
+                { "order", "IF(" + c("elkey") + "=\"\",\"\",IF(COUNTIF($" + l.L("elkey") + "$" + l.First + ":" + c("elkey") + "," + c("elkey") + ")=1," + (r == l.First ? "1" : "MAX($" + l.L("order") + "$" + l.First + ":$" + l.L("order") + (r - 1) + ")+1") + ",\"\"))" },
+                { "elkey", "IF(TRIM(" + c("el") + "&\"\")<>\"\",TRIM(" + c("el") + "&\"\"),IF(" + c("rd") + "=\"\",\"\"," + above + "))" },
+                // 1 within the last 7 working days before «Дата завершения проверки» (and after it), 2 before them.
+                { "priority", l["deadline"] == 0 ? "\"\"" : empty + "IF(ISNUMBER(" + c("deadline") + "),IFERROR(IF(TODAY()>=WORKDAY(" + c("deadline") + ",-7),1,2),\"\"),\"\"))" } };
         }
         // «Ведомость»: the element of every row carried down (AF), the trimmed code (AG) and the first row of an element (AH), 200 rows past the data.
         void WriteVedHelpers(CancellationToken token) {
             var ved = rd.Ved; string path = PathFor(Ved); var doc = Xml(path); ExpandSharedFormulas(doc);
+            if (ved.Import != null) WriteVedData(doc, token);
             var data = doc.Root.Element(N + "sheetData"); var rows = data.Elements(N + "row").ToDictionary(e => (int)e.Attribute("r"));
             int oldLast = rows.Where(p => p.Value.Elements(N + "c").Any(c => Column((string)c.Attribute("r")) == 33 && c.Element(N + "f") != null)).Select(p => p.Key).DefaultIfEmpty(0).Max();
             ved.HelperLast = Math.Max(oldLast, ved.Last + 200);
@@ -271,6 +311,69 @@ namespace ReviewMerge {
             var dimension = doc.Root.Element(N + "dimension");
             if (dimension != null) { int maxRow = rows.Keys.DefaultIfEmpty(1).Max(), maxCol = Math.Max(34, data.Elements(N + "row").Elements(N + "c").Select(e => Column((string)e.Attribute("r"))).DefaultIfEmpty(1).Max()); dimension.SetAttributeValue("ref", "A1:" + MergeEngine.ExcelColumn(maxCol) + maxRow); }
             Store(path, doc);
+        }
+        // The rows of «База» in place of the old data of «Ведомость»: A–AE with the formats of the first data row, the merges and heights of «База».
+        void WriteVedData(XDocument doc, CancellationToken token) {
+            var ved = rd.Ved; var import = ved.Import; int width = RdImport.Width;
+            var data = doc.Root.Element(N + "sheetData"); var rows = data.Elements(N + "row").ToDictionary(e => (int)e.Attribute("r"));
+            // The format of a column is that of its first data cells; a column «Ведомость» did not have takes that of the nearest one to the left (not a date).
+            var styles = new Dictionary<int, int>();
+            foreach (var c in rows.Where(p => p.Key >= ved.First).OrderBy(p => p.Key).Take(50).SelectMany(p => p.Value.Elements(N + "c"))) { int col = Column((string)c.Attribute("r")); if (col <= width && !styles.ContainsKey(col)) styles[col] = (int?)c.Attribute("s") ?? 0; }
+            Func<int, int> styleOf = c => { int s; if (styles.TryGetValue(c, out s)) return s; for (int k = c - 1; k >= 1; k--) if (!import.DateColumns.Contains(k) && styles.TryGetValue(k, out s)) return s; return bodyStyle; };
+            int last = Math.Max(import.OldLast, ved.Last);
+            for (int r = ved.First; r <= last; r++) {
+                if (r % 500 == 0) token.ThrowIfCancellationRequested();
+                object[] values, before; import.Rows.TryGetValue(r, out values); import.OldRows.TryGetValue(r, out before);
+                XElement row;
+                if (!rows.TryGetValue(r, out row)) {
+                    if (values == null) continue;
+                    row = new XElement(N + "row", new XAttribute("r", r)); var next = rows.Where(p => p.Key > r).OrderBy(p => p.Key).Select(p => p.Value).FirstOrDefault();
+                    if (next != null) next.AddBeforeSelf(row); else data.Add(row); rows[r] = row;
+                }
+                row.SetAttributeValue("spans", null);
+                // Below the new data the cells keep their format and lose their values.
+                if (values == null) {
+                    foreach (var cell in row.Elements(N + "c").Where(e => Column((string)e.Attribute("r")) <= width)) { cell.Elements().Remove(); cell.SetAttributeValue("t", null); }
+                    continue;
+                }
+                // A row of «База» with its own height gets it; a row that did not change keeps its height; another is fitted by Excel.
+                bool same = before != null && Enumerable.Range(0, width).All(i => Text(before[i]) == Text(values[i]));
+                double height;
+                if (import.Heights.TryGetValue(r, out height)) { row.SetAttributeValue("ht", height.ToString(Inv)); row.SetAttributeValue("customHeight", 1); }
+                else if (!same) { row.SetAttributeValue("ht", null); row.SetAttributeValue("customHeight", null); }
+                row.Elements(N + "c").Where(e => Column((string)e.Attribute("r")) <= width).Remove();
+                for (int c = 1; c <= width; c++) {
+                    object value = values[c - 1]; int style = styleOf(c);
+                    if (import.DateColumns.Contains(c) && value is double && XlsxReader.DateSerial(value).HasValue) style = MainDateStyle(style);
+                    row.Add(Cell(r, c, Text(value) == "" ? null : value, style));
+                }
+                var sorted = row.Elements(N + "c").OrderBy(e => Column((string)e.Attribute("r"))).ToList(); sorted.Remove(); row.Add(sorted);
+            }
+            // Headers of «База» that «Ведомость» has no header for, in the format of the header to the left.
+            XElement head;
+            if (rows.TryGetValue(import.Header, out head)) foreach (var h in import.NewHeaders) {
+                SetCell(head, Cell(import.Header, h.Key, h.Value, StyleAt(doc, import.Header, h.Key - 1, headStyle)));
+                var sorted = head.Elements(N + "c").OrderBy(e => Column((string)e.Attribute("r"))).ToList(); sorted.Remove(); head.Add(sorted);
+            }
+            // Merges of the data area come from «База»; the merges of the header stay.
+            var merges = doc.Root.Element(N + "mergeCells");
+            if (merges != null) merges.Elements(N + "mergeCell").Where(e => { var m = Regex.Match((string)e.Attribute("ref") ?? "", @"^([A-Z]+)\d+:[A-Z]+(\d+)$"); return m.Success && int.Parse(m.Groups[2].Value, Inv) >= ved.First && Column(m.Groups[1].Value) <= width; }).Remove();
+            if (import.Merges.Count > 0) {
+                if (merges == null) {
+                    string[] before = { "sheetData", "sheetCalcPr", "sheetProtection", "protectedRanges", "scenarios", "autoFilter", "sortState", "dataConsolidate", "customSheetViews" };
+                    merges = new XElement(N + "mergeCells"); doc.Root.Elements().Last(e => before.Contains(e.Name.LocalName)).AddAfterSelf(merges);
+                }
+                foreach (var m in import.Merges) merges.Add(new XElement(N + "mergeCell", new XAttribute("ref", MergeEngine.ExcelColumn(m[1]) + m[0] + ":" + MergeEngine.ExcelColumn(m[3]) + m[2])));
+            }
+            if (merges != null) { if (merges.Elements().Any()) merges.SetAttributeValue("count", merges.Elements().Count()); else merges.Remove(); }
+            // The filter, validation lists and conditional formatting of the data follow it down.
+            if (ved.Last > import.OldLast && import.OldLast >= ved.First) {
+                string old = import.OldLast.ToString(Inv), now = ved.Last.ToString(Inv);
+                Func<string, string> grow = refs => Regex.Replace(refs ?? "", @"(:\$?[A-Z]{1,3}\$?)" + old + @"(?!\d)", "${1}" + now);
+                foreach (var e in doc.Root.Descendants().Where(e => e.Name == N + "dataValidation" || e.Name == N + "conditionalFormatting")) e.SetAttributeValue("sqref", grow((string)e.Attribute("sqref")));
+                foreach (var e in doc.Root.Descendants(N + "conditionalFormatting").Descendants(N + "formula")) e.Value = grow(e.Value);
+                var filter = doc.Root.Element(N + "autoFilter"); if (filter != null) filter.SetAttributeValue("ref", grow((string)filter.Attribute("ref")));
+            }
         }
         static readonly string[][] ElementColors = { new[] { "готов к ВПР", "FFC6EFCE", "FF006100" }, new[] { "замечания", "FFFFC7CE", "FF9C0006" }, new[] { "не согласован ТЭ", "FFFFEB9C", "FF9C5700" },
             new[] { "неполный комплект", "FFFCE4D6", "FF833C0B" }, new[] { "расхождение с ВЭ РД", "FFFF9999", "FF7F0000" }, new[] { "в проверке", "FFF2F2F2", "FF808080" } };
@@ -372,7 +475,7 @@ namespace ReviewMerge {
                 string header = Text(rd.Target.At(rd.Layout.Header, rd.Layout[code]));
                 type(header == "" ? code : header, M(code) + ",1", sets.Count(marked), sets.Count(s => marked(s) && resolved(s)));
             }
-            type("Примечание (текст в столбце «Примечание»)", M("note") + ",\"?*\"", sets.Count(s => Text(s["note"]) != ""), sets.Count(s => Text(s["note"]) != "" && resolved(s)));
+            if (rd.NotesCount) type("Примечание (текст в столбце «Примечание»)", M("note") + ",\"?*\"", sets.Count(s => Text(s["note"]) != ""), sets.Count(s => Text(s["note"]) != "" && resolved(s)));
             r++;
             sh.Set(r, 1, "Акты сдачи-приёмки", headLeft); sh.Set(r, 2, "Шт.", head); r++;
             var acts = rd.Acts;
