@@ -44,6 +44,11 @@ namespace ReviewMerge {
         public bool CurrentDateForNewReviews, MatchSurnames;
         // Working documentation: the RD check sheet («Проверка комплектов») instead of the PD register.
         public bool Rd;
+        // «Примечание» (comments) counts as a remark: by default yes for PD, no for RD.
+        public bool? NotesAsRemarks;
+        public bool NotesCount { get { return NotesAsRemarks ?? !Rd; } }
+        // RD: the stage list file whose sheet «База» replaces the data of «Ведомость» before the build; null keeps «Ведомость» as it is.
+        public string RdBase;
         public bool KeepLegacyColumns;
         public bool KeepLegacyReport;
         // PDF made after the build: paper, separate files or one file, names.
@@ -339,7 +344,7 @@ namespace ReviewMerge {
                     double? d = XlsxReader.DateSerial(row.Values[9]);
                     if (d.HasValue && DateTime.FromOADate(d.Value) < min) min = DateTime.FromOADate(d.Value);
                 }
-                if (row.Values.Skip(12).Take(6).Any(v => Txt(v) != "" && Txt(v) != "0") || Txt(row.Values[18]) != "" || Txt(row.Values[19]) != "") result.WithIssues++;
+                if (row.Values.Skip(12).Take(6).Any(v => Txt(v) != "" && Txt(v) != "0") || Txt(row.Values[18]) != "" || options.NotesCount && Txt(row.Values[19]) != "") result.WithIssues++;
             }
             if ((asOf.Date-min.Date).TotalDays > 730) throw new InvalidDataException("Период проверки больше двух лет. Проверьте даты в столбце J.");
             for (var d=min.Date;d<=asOf.Date;d=d.AddDays(1)) result.Dates.Add(d);
