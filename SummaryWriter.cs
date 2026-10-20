@@ -137,7 +137,7 @@ namespace ReviewMerge {
                 g.Set(rn,h+30,BoxNormal(row.Values[11]),bodyStyle,BoxNormalFormula(box));g.Set(rn,h+48,";"+Rules.Kind(row.Values[10])+"|",bodyStyle,"IF(TRIM("+kindRef+")=\"\",\";Не указан|\",\";\"&UPPER(TRIM("+kindRef+"))&\"|\")");
                 g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(box,normal,item,numbers,row.Values[11],keys[i]));
                 g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+nameTable+",3,FALSE),"+rawRef+"))");
-                g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
+                g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\",LEN("+Rules.ExcelText(who)+")>0),1,0)");
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">=36526,"+date+"<109575),INT("+date+"),\"\")");
                 string marks=MainCell(name,mainColumns.Letter(13),mr)+":"+mainColumns.Letter(18)+mr;
                 string normalizedMarks=MergeEngine.ExcelColumn(h+31)+rn+":"+MergeEngine.ExcelColumn(h+36)+rn;

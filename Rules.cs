@@ -92,9 +92,10 @@ namespace ReviewMerge {
             double number; return double.TryParse(Text(value).Replace(',', '.'), NumberStyles.Float, Inv, out number) && number == 1;
         }
         // Keep the saved cache and live Excel calculations consistent on pasted whitespace.
+        // The no-break space is a literal: CHAR(160) depends on the code page of the computer.
         public static string ExcelText(string cell) {
             string s = cell + "&\"\"";
-            foreach (string token in new[]{"CHAR(160)","CHAR(9)","CHAR(10)","CHAR(13)","\"\u202f\"","\"\u2007\""})
+            foreach (string token in new[]{"\"\u00a0\"","CHAR(9)","CHAR(10)","CHAR(13)","\"\u202f\"","\"\u2007\""})
                 s = "SUBSTITUTE(" + s + "," + token + ",\" \")";
             return "TRIM(" + s + ")";
         }
