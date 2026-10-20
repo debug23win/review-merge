@@ -20,25 +20,29 @@ namespace ReviewMerge {
                 if(args.Length>=3&&args[0]=="--pdf"){
                     var pdf=PdfSwitches(ref args);if(args.Length>4)throw new ArgumentException("--pdf книга.xlsx yyyy-MM-dd [A4|A4-landscape|A3|A3-landscape] [--pdf-combined] [--pdf-name=…] [--pdf-name-summary=…] [--pdf-name-work=…]");
                     if(args.Length==4)pdf.Paper=PdfPapers.Parse(args[3]);
-                    foreach(var file in PdfReport.Write(Path.GetFullPath(args[1]),DateTime.ParseExact(args[2],"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture),pdf))Console.WriteLine(file.Path);
+                    string book=InputFile(args[1],"книги");pdf.CheckReportDate=true;
+                    // The messages of the PDF (missing sheet, other date, long name) are Russian: written without the stack trace.
+                    List<PdfFile> files;try{files=PdfReport.Write(book,InputDate(args[2]),pdf);}catch(InvalidDataException ex){throw new InputError("PDF не создан: "+ex.Message);}catch(IOException ex){throw new InputError("PDF не создан: "+ex.Message);}
+                    foreach(var file in files)Console.WriteLine(file.Path);
                     return 0;
                 }
                 if (args.Length > 0 && args[0] == "--batch") {
                     // Options of the batch mode answer every question with "yes": --match-surnames merges people with one surname, --fill-incomplete fills the remaining rows of partly checked boxes.
                     string[] switches={"--current-date-for-new","--match-surnames","--fill-incomplete","--convert-marks","--keep-legacy-columns","--keep-legacy-report","--remarks-with-borders","--remarks-without-borders","--recalculate-history","--rd","--notes-as-remarks","--notes-not-remarks"};
                     var options=new MergeOptions{CurrentDateForNewReviews=args.Contains(switches[0]),MatchSurnames=args.Contains(switches[1]),KeepLegacyColumns=args.Contains(switches[4]),KeepLegacyReport=args.Contains(switches[5]),RemarksWithBorders=args.Contains(switches[6]),RecalculateHistory=args.Contains(switches[8]),Rd=args.Contains(switches[9])};
-                    // «Примечание» as a remark: PD yes and RD no unless a switch says otherwise; --rd-base=файл.xlsx updates «Ведомость» from «База».
+                    // «Примечание» as a remark: PD yes and RD no unless a switch says otherwise; --rd-base=файл.xlsx updates «Ведомость» from «База» (empty: no base).
                     if(args.Contains(switches[10]))options.NotesAsRemarks=true;if(args.Contains(switches[11]))options.NotesAsRemarks=false;
-                    string baseSwitch=args.FirstOrDefault(a=>a.StartsWith("--rd-base=",StringComparison.Ordinal));if(baseSwitch!=null){options.RdBase=Path.GetFullPath(baseSwitch.Substring(10));args=args.Where(a=>a!=baseSwitch).ToArray();}
+                    string baseSwitch=args.FirstOrDefault(a=>a.StartsWith("--rd-base=",StringComparison.Ordinal));if(baseSwitch!=null){string value=MainForm.CleanPath(baseSwitch.Substring(10));options.RdBase=value==""||!options.Rd?null:InputFile(value,"базы элементов");args=args.Where(a=>a!=baseSwitch).ToArray();}
                     if(args.Contains(switches[2]))options.FillIncomplete=list=>list;
                     if(args.Contains(switches[3]))options.ConvertMark=(mark,count)=>true;
                     options.Pdf=PdfSwitches(ref args);
                     args=args.Where(a=>!switches.Contains(a)).ToArray();
                     // Working documentation (--rd) may be built from the consolidated book alone: the reports are calculated again.
                     if (args.Length < (options.Rd ? 4 : 5)) throw new ArgumentException("--batch результат.xlsx yyyy-MM-dd основной-лист файл1.xlsx [файл2.xlsx ...] [--rd] [--rd-base=база.xlsx] [--notes-as-remarks|--notes-not-remarks] [--current-date-for-new] [--match-surnames] [--fill-incomplete] [--convert-marks] [--remarks-with-borders] [--recalculate-history] [--pdf-paper=A4|A4-landscape|A3|A3-landscape] [--pdf-combined] [--pdf-name=…] [--pdf-name-summary=…] [--pdf-name-work=…]");
-                    DateTime date = DateTime.ParseExact(args[2], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+                    DateTime date = InputDate(args[2]);
+                    var sources = args.Skip(4).Select(a => InputFile(a, "проверяющего")).ToList();
                     var logs = new List<string>();
-                    var result = MergeEngine.Run(args.Skip(4).Select(Path.GetFullPath).ToList(), args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
+                    var result = MergeEngine.Run(sources, args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
                     var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.Elements, result.Rd, result.DatesAssignedToday, result.FilledRows, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count, ProblemList=result.Problems.Select(p=>Path.GetFileName(p.File)+", строка "+p.Row+": "+p.Detail).ToList(), ConflictList=result.Conflicts.Select(c=>c.Document+" | "+c.Field+" | "+c.Details.Replace("\n"," / ")).ToList(),
                         IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.VolumeMerges, result.Output, result.Pdf, result.Pdfs, result.PdfError, Log=logs };
                     File.WriteAllText(args[1]+".run.json", new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
@@ -54,7 +58,8 @@ namespace ReviewMerge {
                 }
                 Application.Run(new MainForm()); return 0;
             } catch(Exception ex) {
-                if(args.Length>1 && (args[0]=="--batch"||args[0]=="--pdf")) File.WriteAllText(args[1]+".error.txt",ex.ToString(),Encoding.UTF8);
+                // A wrong argument is written as its message; other errors with the stack trace.
+                if(args.Length>1 && (args[0]=="--batch"||args[0]=="--pdf")) File.WriteAllText(args[1]+".error.txt",ex is InputError?ex.Message:ex.ToString(),Encoding.UTF8);
                 else MessageBox.Show(ex.Message,"Свод проверки",MessageBoxButtons.OK,MessageBoxIcon.Error);
                 return 1;
             }
@@ -75,7 +80,19 @@ namespace ReviewMerge {
             }
             args=rest.ToArray();return pdf;
         }
+        // Arguments of the batch and --pdf modes: the date as yyyy-MM-dd and existing files, with Russian messages.
+        static DateTime InputDate(string text) {
+            DateTime date;if(DateTime.TryParseExact(text,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out date))return date;
+            throw new InputError("Дата «"+text+"» не в формате ГГГГ-ММ-ДД, например "+DateTime.Today.ToString("yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture)+".");
+        }
+        static string InputFile(string text,string what) {
+            string path=MainForm.CleanPath(text);
+            try{path=Path.GetFullPath(path);}catch(Exception ex){if(ex is ArgumentException||ex is NotSupportedException||ex is PathTooLongException)throw new InputError("Недопустимый путь к файлу "+what+": «"+text+"».");throw;}
+            if(!File.Exists(path))throw new InputError("Не найден файл "+what+": "+path);
+            return path;
+        }
     }
+    sealed class InputError : ArgumentException { public InputError(string message):base(message){} }
     public sealed class MainForm : Form {
         readonly List<string> paths = new List<string>();
         readonly ListView files = new ListView();
@@ -112,13 +129,13 @@ namespace ReviewMerge {
             var titleBar=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};titleBar.Controls.Add(new Label {Text="Свод проверки документации",Font=new Font("Segoe UI",19,FontStyle.Bold),AutoSize=true,ForeColor=Color.FromArgb(28,46,65)});titleBar.Controls.Add(DesktopUpdates.Updates.Attach(this,()=>running));layout.Controls.Add(titleBar,0,0);
             subtitle.AutoSize=true;subtitle.ForeColor=Color.FromArgb(73,91,108);layout.Controls.Add(subtitle,0,1);
             tabs.Dock=DockStyle.Fill;layout.Controls.Add(tabs,0,2);
-            var page=new TabPage("Сборка свода") {Padding=new Padding(14),BackColor=Color.White};tabs.TabPages.Add(page);
+            var page=new TabPage("Сборка свода") {Padding=new Padding(14),BackColor=Color.White,AutoScroll=true};tabs.TabPages.Add(page);
             var content=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=10};
             content.RowStyles.Add(new RowStyle(SizeType.Absolute,38));content.RowStyles.Add(new RowStyle(SizeType.Percent,48));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute,40));content.RowStyles.Add(new RowStyle(SizeType.Absolute,64));content.RowStyles.Add(new RowStyle(SizeType.Absolute,66));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute,44));content.RowStyles.Add(new RowStyle(SizeType.Absolute,40));content.RowStyles.Add(new RowStyle(SizeType.Absolute,28));
             content.RowStyles.Add(new RowStyle(SizeType.Percent,52));content.RowStyles.Add(new RowStyle(SizeType.Absolute,31));page.Controls.Add(content);
-            var buttons=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
+            var buttons=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false,Margin=new Padding(3,0,3,0)};
             buttons.Controls.Add(EditButton("Добавить файлы",130,(s,e)=>ChooseFiles()));
             buttons.Controls.Add(EditButton("Добавить папку",135,(s,e)=>ChooseFolder()));
             buttons.Controls.Add(EditButton("Удалить",90,(s,e)=>RemoveSelected()));
@@ -139,7 +156,7 @@ namespace ReviewMerge {
             parameters.Controls.Add(new Label {Text="Формат PDF:",AutoSize=true,Anchor=AnchorStyles.Left,Margin=new Padding(10,3,0,3)},4,0);
             paper.DropDownStyle=ComboBoxStyle.DropDownList;paper.Dock=DockStyle.Fill;paper.Items.AddRange(PdfPapers.Names);paper.SelectedIndex=(int)SavedPaper();
             paper.SelectedIndexChanged+=(s,e)=>{try{UserSettings.SetText("PdfPaper",PdfPapers.Key((PdfPaper)paper.SelectedIndex));}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}};parameters.Controls.Add(paper,5,0);content.Controls.Add(parameters,0,2);
-            var settings=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=2,Margin=new Padding(0)};settings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            var settings=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=new Padding(0)};settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             currentDate.Text="Ставить текущую дату новым проверенным томам";currentDate.AutoSize=true;currentDate.Anchor=AnchorStyles.Left;currentDate.Checked=UserSettings.GetFlag("CurrentDateForNewReviews",false);currentDate.CheckedChanged+=(s,e)=>{SaveFlag("CurrentDateForNewReviews",currentDate.Checked);UpdateRule();};
             // The volumes with remarks above «СВОД» are plain text unless framed here; on the same line as the first option.
             framedRemarks.Text="Замечания над «СВОД» в рамках";framedRemarks.AutoSize=true;framedRemarks.Margin=new Padding(24,3,0,0);framedRemarks.Checked=UserSettings.GetFlag("RemarksWithBorders",false);framedRemarks.CheckedChanged+=(s,e)=>SaveFlag("RemarksWithBorders",framedRemarks.Checked);
@@ -151,8 +168,8 @@ namespace ReviewMerge {
             baseLine.Controls.Add(new Label {Text="База элементов:",AutoSize=true,Margin=new Padding(3,6,6,0)});basePath.Width=470;basePath.Margin=new Padding(0,2,6,0);baseLine.Controls.Add(basePath);
             basePath.TextChanged+=(s,e)=>{if(switching)return;try{UserSettings.SetText("RdBase",basePath.Text.Trim());}catch(Exception ex){Append("Не удалось сохранить настройку: "+ex.Message);}};
             baseLine.Controls.Add(EditButton("Обзор…",95,(s,e)=>ChooseBase()));
-            var secondLine=new FlowLayoutPanel{AutoSize=true,WrapContents=false,Margin=new Padding(0),Anchor=AnchorStyles.Left};secondLine.Controls.Add(matchSurnames);secondLine.Controls.Add(baseLine);settings.Controls.Add(secondLine,0,1);
-            forgetNames.AutoSize=true;forgetNames.Anchor=AnchorStyles.Left;forgetNames.Margin=new Padding(18,3,0,0);forgetNames.LinkClicked+=(s,e)=>{if(MessageBox.Show(this,"Забыть сохранённые ответы о совпадающих фамилиях и отметках «да», «+», «х»? При следующей сборке программа спросит снова.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;try{UserSettings.ForgetAnswers();}catch(Exception ex){Append("Не удалось сбросить ответы: "+ex.Message);}RefreshForget();};settings.Controls.Add(forgetNames,1,1);RefreshForget();
+            var secondLine=new FlowLayoutPanel{AutoSize=true,WrapContents=false,Margin=new Padding(0),Anchor=AnchorStyles.Top|AnchorStyles.Left};secondLine.Controls.Add(matchSurnames);secondLine.Controls.Add(baseLine);secondLine.Controls.Add(forgetNames);settings.Controls.Add(secondLine,0,1);
+            forgetNames.AutoSize=true;forgetNames.Margin=new Padding(18,6,0,0);forgetNames.LinkClicked+=(s,e)=>{if(MessageBox.Show(this,"Забыть сохранённые ответы о совпадающих фамилиях и отметках «да», «+», «х»? При следующей сборке программа спросит снова.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;try{UserSettings.ForgetAnswers();}catch(Exception ex){Append("Не удалось сбросить ответы: "+ex.Message);}RefreshForget();};RefreshForget();
             content.Controls.Add(settings,0,3);
             rule.Dock=DockStyle.Fill;rule.ForeColor=Color.FromArgb(73,91,108);UpdateRule();content.Controls.Add(rule,0,4);
             var save=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3};save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,120));save.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));save.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
@@ -205,10 +222,13 @@ namespace ReviewMerge {
         bool switching;
         // After the scaling to the screen DPI: list columns grow with the fonts, and the window fits the working area
         // (at 150 % on a 1920×1080 screen the scaled minimum size would be taller than the screen).
+        // The fixed rows of the page (351), four files and five lines of the log (230) and the padding (28): below that the page scrolls.
+        const int PageMinimum=609;
         protected override void OnLoad(EventArgs e) {
             base.OnLoad(e);
             float scale=CurrentAutoScaleDimensions.Width/96f;
             if(scale>1.01f)foreach(ColumnHeader column in files.Columns)column.Width=(int)Math.Round(column.Width*scale);
+            tabs.TabPages[0].AutoScrollMinSize=new Size(0,(int)Math.Ceiling(PageMinimum*CurrentAutoScaleDimensions.Height/96f));
             var area=Screen.FromControl(this).WorkingArea;
             if(Width>area.Width||Height>area.Height){
                 MinimumSize=new Size(Math.Min(MinimumSize.Width,area.Width),Math.Min(MinimumSize.Height,area.Height));
@@ -235,15 +255,17 @@ namespace ReviewMerge {
         Button EditButton(string text,int width,EventHandler handler) {
             var b=new Button {Text=text,Width=width,Height=31,FlatStyle=FlatStyle.Standard};b.Click+=handler;editingButtons.Add(b);return b;
         }
+        // A path pasted from Explorer («Копировать как путь») comes in quotes.
+        public static string CleanPath(string text){string s=(text??"").Trim();if(s.Length>=2&&s[0]=='"'&&s[s.Length-1]=='"')s=s.Substring(1,s.Length-2).Trim();return s;}
         void ChooseFiles() { using(var dialog=new OpenFileDialog {Title="Выберите файлы проверяющих",Filter="Книги Excel (*.xlsx)|*.xlsx",Multiselect=true}) if(dialog.ShowDialog(this)==DialogResult.OK) foreach(string f in dialog.FileNames) AddPath(f); }
         void ChooseFolder() {using(var dialog=new FolderBrowserDialog {Description="Выберите папку с сохранёнными файлами проверяющих (включая вложенные папки)"}) if(dialog.ShowDialog(this)==DialogResult.OK) AddPath(dialog.SelectedPath);}
         public void AddPath(string path) {
             try {
-                if(Directory.Exists(path)) { foreach(string f in Directory.EnumerateFiles(path,"*.xlsx",SearchOption.AllDirectories).OrderBy(f=>f,StringComparer.OrdinalIgnoreCase)) AddPath(f);return; }
+                path=CleanPath(path);if(Directory.Exists(path)) { foreach(string f in Directory.EnumerateFiles(path,"*.xlsx",SearchOption.AllDirectories).OrderBy(f=>f,StringComparer.OrdinalIgnoreCase)) AddPath(f);return; }
                 path=Path.GetFullPath(path);
                 if(!File.Exists(path) || !path.EndsWith(".xlsx",StringComparison.OrdinalIgnoreCase) || Path.GetFileName(path).StartsWith("~",StringComparison.Ordinal))return;
                 if(paths.Any(p=>string.Equals(p,path,StringComparison.OrdinalIgnoreCase)))return;
-                if(string.Equals(path,output.Text,StringComparison.OrdinalIgnoreCase))return;
+                if(string.Equals(path,CleanPath(output.Text),StringComparison.OrdinalIgnoreCase))return;
                 paths.Add(path);RefreshList();
             } catch(Exception ex) {Append("Не удалось добавить: "+path+". "+ex.Message);}
         }
@@ -265,20 +287,20 @@ namespace ReviewMerge {
             if(!history&&paths.Count==0) {MessageBox.Show(this,"Добавьте файлы проверяющих.",Text,MessageBoxButtons.OK,MessageBoxIcon.Information);return;}
             if(string.IsNullOrWhiteSpace(output.Text) || string.IsNullOrWhiteSpace(sheetName.Text)) {MessageBox.Show(this,"Укажите основной лист и итоговый файл.",Text);return;}
             string destination;
-            try {destination=Path.GetFullPath(output.Text);}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
+            try {destination=Path.GetFullPath(CleanPath(output.Text));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}
             if(!File.Exists(destination)){MessageBox.Show(this,"Выберите существующий сводный документ, в который нужно добавить данные.",Text);return;}
             bool rd=rdMode.Checked;string rdBase=null;
-            if(rd&&basePath.Text.Trim()!=""){try{rdBase=Path.GetFullPath(basePath.Text.Trim());}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}if(!File.Exists(rdBase)){MessageBox.Show(this,"Не найден файл базы элементов:\n"+rdBase+"\n\nУкажите файл этапа с листом «База» или очистите поле.",Text);return;}}
+            if(rd&&CleanPath(basePath.Text)!=""){try{rdBase=Path.GetFullPath(CleanPath(basePath.Text));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}if(!File.Exists(rdBase)){MessageBox.Show(this,"Не найден файл базы элементов:\n"+rdBase+"\n\nУкажите файл этапа с листом «База» или очистите поле.",Text);return;}}
             if(history&&MessageBox.Show(this,rd?"Пересчитать «СВОД», «Итоги проверки», «Статистику» и «Элементы» по данным сводной книги РД?\n\nФайлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.":"Пересчитать «СВОД», статистику и «Итоги работы» по данным сводного документа?\n\nФайлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             var selected=history?new List<string>():paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
-            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=AskConvertMark,Pdf=new PdfSettings{Paper=(PdfPaper)paper.SelectedIndex,Combined=pdfMode.SelectedIndex==1,SummaryName=summaryName.Text,WorkName=workName.Text,CombinedName=combinedName.Text,WorkSheet=rd?RdEngine.RdWork:PdfSettings.PdWork},RemarksWithBorders=framedRemarks.Checked,RecalculateHistory=history,Rd=rd,NotesAsRemarks=notesRemarks.Checked,RdBase=rdBase};
+            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=(mark,count)=>AskConvertMark(mark,count,rd),Pdf=new PdfSettings{Paper=(PdfPaper)paper.SelectedIndex,Combined=pdfMode.SelectedIndex==1,SummaryName=summaryName.Text,WorkName=workName.Text,CombinedName=combinedName.Text,WorkSheet=rd?RdEngine.RdWork:PdfSettings.PdWork},RemarksWithBorders=framedRemarks.Checked,RecalculateHistory=history,Rd=rd,NotesAsRemarks=notesRemarks.Checked,RdBase=rdBase};
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append(history?(rd?"Пересчёт отчётов по сводной книге РД.":"Пересчёт статистики всех дней по сводному документу."):"Начата сборка "+selected.Count+" файлов"+(rd?" (РД).":"."));
             var worker=new Thread(()=> {
                 try {
                     var result=MergeEngine.Run(selected,destination,main,date,(n,s)=>Ui(()=>{progress.Value=n;Append(s);}),cancellation.Token,options);
                     Ui(()=>{lastOutput=result.Output;conflicts.DataSource=result.Conflicts;totals.Text=result.Rd?"Комплектов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Элементов: "+result.Elements+", проверено: "+result.Boxes+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count
                             :"Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Коробов проверено не полностью: "+result.IncompleteBoxes.Count+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
-                        Append("Дополнен сводный документ: "+result.Output);foreach(string pdf in result.Pdfs)Append("Создан PDF: "+pdf);if(result.PdfError!=null)Append("PDF не создан: "+result.PdfError);foreach(var merge in result.VolumeMerges)Append("Один том по номеру тома "+merge);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
+                        Append("Дополнен сводный документ: "+result.Output);foreach(string pdf in result.Pdfs)Append("Создан PDF: "+pdf);foreach(var merge in result.VolumeMerges)Append("Один том по номеру тома "+merge);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
                         foreach(var v in result.FilledBoxes)Append("Заполнены без замечаний остальные строки. "+v);foreach(var v in result.IncompleteBoxes)Append("Проверено не полностью, неотмеченные тома не входят в статистику. "+v);
                         foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
                 } catch(OperationCanceledException) {Ui(()=>{Append("Сборка отменена. Итоговый файл не заменён.");Busy(false);cancellation.Dispose();cancellation=null;});}
@@ -301,11 +323,12 @@ namespace ReviewMerge {
             try{UserSettings.SetAnswer("SamePerson",UserSettings.PairKey(raw,known),same);}catch(Exception ex){Ui(()=>Append("Не удалось сохранить ответ: "+ex.Message));}
             Ui(RefreshForget);return same;
         }
-        bool AskConvertMark(string mark,int count) {
+        bool AskConvertMark(string mark,int count,bool rd) {
             string key=XlsxReader.Normal(mark);bool? saved=UserSettings.GetAnswer("Marks",key);
             if(saved.HasValue){Ui(()=>Append("Отметка «"+mark+"»: "+(saved.Value?"переводится в 1":"остаётся как есть")+" (сохранённый ответ)."));return saved.Value;}
             var answer=DialogResult.None;
-            Invoke((Action)(()=>{answer=MessageBox.Show(this,"В столбцах отметок M–R встретилось «"+mark+"» (ячеек: "+count+").\n\nПеревести в «1» — считать это несоответствием?\n\nДа — заменить на 1.\nНет — оставить как есть; такая отметка не учитывается в статистике.\nОтмена — прервать сборку.\n\nОтвет запомнится для следующих сборок.","Отметка в столбцах M–R",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);}));
+            string columns=rd?"П1–П6, Э1–Э6, ПР":"M–R (N–S при столбце «Номер тома»)";
+            Invoke((Action)(()=>{answer=MessageBox.Show(this,"В столбцах отметок "+columns+" встретилось «"+mark+"» (ячеек: "+count+").\n\nПеревести в «1» — считать это несоответствием?\n\nДа — заменить на 1.\nНет — оставить как есть; такая отметка не учитывается в статистике.\nОтмена — прервать сборку.\n\nОтвет запомнится для следующих сборок.","Отметка в столбцах "+(rd?"П1…ПР":"отметок"),MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);}));
             if(answer==DialogResult.Cancel)throw new OperationCanceledException();
             bool convert=answer==DialogResult.Yes;
             try{UserSettings.SetAnswer("Marks",key,convert);}catch(Exception ex){Ui(()=>Append("Не удалось сохранить ответ: "+ex.Message));}

@@ -37,6 +37,8 @@ namespace ReviewMerge {
         // The sheet of the second table: «Итоги работы» of PD, «Итоги проверки» of the working documentation.
         public string WorkSheet=PdWork;
         public const string PdWork="Итоги работы";
+        // --pdf: the date must be the report date the book was built for, since the saved tables show that date.
+        public bool CheckReportDate;
     }
     // A written PDF; Path differs from Requested when the requested file was open in another program.
     public sealed class PdfFile { public string Path,Requested; }
@@ -64,21 +66,38 @@ namespace ReviewMerge {
             if(parts.Length==2&&string.Equals(parts[0].Item2,parts[1].Item2,StringComparison.OrdinalIgnoreCase))
                 throw new IOException("у PDF «СВОД» и «"+work+"» одинаковое имя «"+System.IO.Path.GetFileName(parts[0].Item2)+"»: задайте разные имена.");
             var size=PdfPapers.Size(settings.Paper);string day=asOf.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture);
-            var files=new List<PdfFile>();
+            if(settings.CheckReportDate){var built=book.ReportDate();if(built.HasValue&&built.Value!=asOf.Date)
+                throw new InvalidDataException("книга рассчитана на дату свода "+built.Value.ToString("dd.MM.yyyy",CultureInfo.InvariantCulture)+", а для PDF указана "+day+": укажите дату "+built.Value.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+" или соберите свод на нужную дату.");}
+            // Every part is drawn and every name checked before the first file is written, so a failure leaves no partial PDF.
+            var data=new List<byte[]>();
             foreach(var part in parts){
-                var pdf=new PdfDocument("Свод проверки "+day);foreach(string sheet in part.Item1)book.Render(pdf,sheet,0,size[0],size[1]);
-                files.Add(new PdfFile{Requested=part.Item2,Path=Save(pdf.Save(),part.Item2)});
+                CheckName(part.Item2);
+                var pdf=new PdfDocument("Свод проверки "+day);foreach(string sheet in part.Item1)book.Render(pdf,sheet,0,size[0],size[1]);data.Add(pdf.Save());
             }
+            var files=new List<PdfFile>();
+            try{for(int i=0;i<parts.Length;i++)files.Add(new PdfFile{Requested=parts[i].Item2,Path=Save(data[i],parts[i].Item2)});}
+            catch{foreach(var file in files)TryDelete(file.Path);throw;}
             return files;
+        }
+        // Windows allows 255 characters in a name and 259 in a path; the indexed name «имя (99).pdf» must fit too.
+        // Other systems report a long name when the file is saved.
+        static void CheckName(string path) {
+            string name=System.IO.Path.GetFileName(path),full;
+            try{full=System.IO.Path.GetFullPath(path);}catch(PathTooLongException){full=null;}catch(NotSupportedException){full=null;}catch(ArgumentException){full=null;}
+            bool windows=System.IO.Path.DirectorySeparatorChar=='\\';
+            if(full==null||name.Length+5>255||windows&&full.Length+5>259)throw new IOException("имя PDF «"+name+"» слишком длинное или недопустимое: задайте имя короче.");
         }
         // A file open in another program cannot be replaced: the PDF goes to the first free «имя (1).pdf», «имя (2).pdf»…
         static string Save(byte[] data,string path) {
             string folder=System.IO.Path.GetDirectoryName(path),stem=System.IO.Path.GetFileNameWithoutExtension(path);
             for(int i=0;i<100;i++) {
-                string candidate=i==0?path:System.IO.Path.Combine(folder,stem+" ("+i+").pdf"),temp=candidate+".tmp";
+                // A short temporary name: «имя.pdf.tmp» would be longer than the name itself.
+                string candidate=i==0?path:System.IO.Path.Combine(folder,stem+" ("+i+").pdf"),temp=System.IO.Path.Combine(folder,"~pdf-"+Guid.NewGuid().ToString("N").Substring(0,12)+".tmp");
                 try {File.WriteAllBytes(temp,data);}
                 catch(UnauthorizedAccessException){throw new IOException("нет доступа к папке «"+folder+"».");}
+                catch(PathTooLongException){throw new IOException("путь к папке PDF слишком длинный: «"+folder+"».");}
                 try {if(File.Exists(candidate))File.Delete(candidate);File.Move(temp,candidate);return candidate;}
+                catch(PathTooLongException){TryDelete(temp);throw new IOException("имя PDF «"+System.IO.Path.GetFileName(candidate)+"» слишком длинное: задайте имя короче.");}
                 catch(IOException){TryDelete(temp);}
                 catch(UnauthorizedAccessException){TryDelete(temp);}
             }
@@ -117,6 +136,26 @@ namespace ReviewMerge {
         }
         XDocument Load(string part){using(var m=new MemoryStream(parts[part]))return XDocument.Load(m);}
         public bool Has(string sheet){return sheets.Any(s=>string.Equals(s.Item1,sheet,StringComparison.OrdinalIgnoreCase));}
+        // The report date the book was built for: RD «СВОД»!U2 under «Дата отчёта», PD the cell after the marker in row 1 of «Справка по томам»; null when unknown.
+        public DateTime? ReportDate() {
+            Func<object,DateTime?> date=v=>v is double&&(double)v>=1&&(double)v<2958466?(DateTime?)DateTime.FromOADate((double)v).Date:null;
+            var rd=Row("СВОД",1);object head;if(rd.TryGetValue(21,out head)&&head as string=="Дата отчёта"&&Has(RdEngine.RdWork)){object v;return Row("СВОД",2).TryGetValue(21,out v)?date(v):null;}
+            var pd=Row("Справка по томам",1);
+            foreach(var cell in pd){var text=cell.Value as string;object v;if(text!=null&&text.StartsWith("ReviewMerge.FirstDates.v",StringComparison.Ordinal))return pd.TryGetValue(cell.Key+1,out v)?date(v):null;}
+            return null;
+        }
+        // The values of one row by column, read up to that row only.
+        Dictionary<int,object> Row(string sheetName,int number) {
+            var result=new Dictionary<int,object>();var sheet=sheets.FirstOrDefault(s=>string.Equals(s.Item1,sheetName,StringComparison.OrdinalIgnoreCase));
+            if(sheet==null||!parts.ContainsKey(sheet.Item2))return result;
+            using(var m=new MemoryStream(parts[sheet.Item2]))using(var reader=System.Xml.XmlReader.Create(m))
+                while(reader.ReadToFollowing("row",N.NamespaceName)){
+                    int r;if(!int.TryParse(reader.GetAttribute("r"),NumberStyles.Integer,Inv,out r)||r>number)break;if(r<number)continue;
+                    foreach(var c in ((XElement)XNode.ReadFrom(reader)).Elements(N+"c")){string address=(string)c.Attribute("r");if(address!=null)result[Column(address)]=CellValue(c);}
+                    break;
+                }
+            return result;
+        }
         static string Rgb(XElement color,string fallback){var rgb=color==null?null:(string)color.Attribute("rgb");return string.IsNullOrEmpty(rgb)?fallback:rgb.Length==6?"FF"+rgb:rgb;}
         void ReadStyles() {
             if(!parts.ContainsKey("xl/styles.xml")){styles.Add(new PdfStyle());return;}
@@ -355,7 +394,7 @@ namespace ReviewMerge {
         public double Width(string text){double w=0;foreach(char ch in text)w+=Advance(Glyph(ch));return w/unitsPerEm;}
         public double Scaled(int v){return v*1000.0/unitsPerEm;}
         public string Encode(string text) {
-            var sb=new StringBuilder();foreach(char ch in text){int g=Glyph(ch);if(!Used.ContainsKey(g))Used[g]=ch.ToString();sb.Append(g.ToString("X4",CultureInfo.InvariantCulture));}return sb.ToString();
+            var sb=new StringBuilder();foreach(char ch in text){int g=Glyph(ch);if(!Used.ContainsKey(g))Used[g]=g==0?"\uFFFD":ch.ToString();sb.Append(g.ToString("X4",CultureInfo.InvariantCulture));}return sb.ToString();
         }
         int GlyphOffset(int g){int loca=tables["loca"][0];return locaFormat==0?U16(loca+2*g)*2:(int)U32(loca+4*g);}
         // Keeps the used glyphs, the glyphs they are built from and glyph 0; other glyphs become empty.

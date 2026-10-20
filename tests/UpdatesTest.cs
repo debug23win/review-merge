@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using DesktopUpdates;
@@ -21,6 +22,20 @@ class UpdatesTest {
         string stage=Path.Combine(root,"stage");Updates.Extract(zip,stage);if(File.Exists(Path.Combine(stage,"user-data.xlsx")))throw new Exception("Unexpected data installed");
         string bad=Path.Combine(root,"bad.zip");using(var f=File.Create(bad))using(var z=new ZipArchive(f,ZipArchiveMode.Create))using(var w=new StreamWriter(z.CreateEntry("../escape.exe").Open()))w.Write("bad");
         ExpectFailure(()=>Updates.Extract(bad,Path.Combine(root,"bad-stage")));
-        Console.WriteLine("Update tests passed: stable version, host, digest, checksum, allowlist and ZIP paths");return 0;
+        // Download: a failed attempt leaves no folder in the cache, folders older than an hour are removed, a recent one is kept.
+        string cache=Path.Combine(root,"cache"),old=Path.Combine(cache,"old"),recent=Path.Combine(cache,"recent");Directory.CreateDirectory(old);Directory.CreateDirectory(recent);
+        File.WriteAllText(Path.Combine(old,"package.zip"),"old");Directory.SetLastWriteTimeUtc(old,DateTime.UtcNow.AddDays(-2));
+        string good=Path.Combine(root,"good.zip");using(var f=File.Create(good))using(var z=new ZipArchive(f,ZipArchiveMode.Create))z.CreateEntryFromFile(typeof(UpdatesTest).Assembly.Location,AppInfo.Executable);
+        byte[] package=File.ReadAllBytes(good);string packageHash;using(var h=SHA256.Create())packageHash=BitConverter.ToString(h.ComputeHash(package)).Replace("-","");
+        var version=typeof(UpdatesTest).Assembly.GetName().Version;var release=new ReleaseInfo{Version=new Version(version.Major,version.Minor,version.Build),Url="test",Digest=packageHash,Size=package.Length};
+        Func<string[]> folders=()=>Directory.GetDirectories(cache).Select(Path.GetFileName).OrderBy(n=>n).ToArray();
+        ExpectFailure(()=>Updates.Download(new ReleaseInfo{Version=release.Version,Url="test",Digest=new string('0',64),Size=package.Length},cache,()=>new MemoryStream(package)));
+        if(!folders().SequenceEqual(new[]{"recent"}))throw new Exception("Cache after a bad hash: "+string.Join(",",folders()));
+        ExpectFailure(()=>Updates.Download(new ReleaseInfo{Version=release.Version,Url="test",Digest=packageHash,Size=package.Length+1},cache,()=>new MemoryStream(package)));
+        ExpectFailure(()=>Updates.Download(new ReleaseInfo{Version=new Version(version.Major+1,0,0),Url="test",Digest=packageHash,Size=package.Length},cache,()=>new MemoryStream(package)));
+        if(!folders().SequenceEqual(new[]{"recent"}))throw new Exception("Cache after failed downloads: "+string.Join(",",folders()));
+        string staged=Updates.Download(release,cache,()=>new MemoryStream(package));
+        if(!File.Exists(Path.Combine(staged,AppInfo.Executable))||folders().Length!=2||!folders().Contains("recent"))throw new Exception("Cache after a good download: "+string.Join(",",folders()));
+        Console.WriteLine("Update tests passed: stable version, host, digest, checksum, allowlist, ZIP paths and the download cache");return 0;
     }
 }
