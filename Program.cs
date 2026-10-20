@@ -203,6 +203,19 @@ namespace ReviewMerge {
         const string PdIntro="Добавьте файлы проверяющих и выберите существующий сводный документ.\nЕго строки и оформление сохраняются; новые документы добавляются в конец. Перед записью создаётся резервная копия. Закройте документ в Excel на время сборки.";
         const string RdIntro="Добавьте файлы проверяющих (форма проверки РД) и выберите сводную книгу РД — форму с листами «"+RdSheet+"» и «Ведомость».\nКомплекты сопоставляются по шифру РД и номеру изменения; новые добавляются в конец листа. Перед записью создаётся резервная копия. Закройте книгу в Excel на время сборки.";
         bool switching;
+        // After the scaling to the screen DPI: list columns grow with the fonts, and the window fits the working area
+        // (at 150 % on a 1920×1080 screen the scaled minimum size would be taller than the screen).
+        protected override void OnLoad(EventArgs e) {
+            base.OnLoad(e);
+            float scale=CurrentAutoScaleDimensions.Width/96f;
+            if(scale>1.01f)foreach(ColumnHeader column in files.Columns)column.Width=(int)Math.Round(column.Width*scale);
+            var area=Screen.FromControl(this).WorkingArea;
+            if(Width>area.Width||Height>area.Height){
+                MinimumSize=new Size(Math.Min(MinimumSize.Width,area.Width),Math.Min(MinimumSize.Height,area.Height));
+                Size=new Size(Math.Min(Width,area.Width),Math.Min(Height,area.Height));
+                Location=new Point(area.Left+(area.Width-Width)/2,area.Top+(area.Height-Height)/2);
+            }
+        }
         // The mode changes the main sheet, the PDF names and labels; options of PD volumes are not used for RD.
         void ApplyMode() {
             bool rd=rdMode.Checked;switching=true;
