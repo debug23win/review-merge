@@ -49,6 +49,16 @@ namespace ReviewMerge {
             var rows=indices.Select(i=>i+7).OrderBy(i=>i).ToList();var ranges=new List<string>();string c="$"+MergeEngine.ExcelColumn(col)+"$";
             for(int n=0;n<rows.Count;n++){int first=rows[n],last=first;while(n+1<rows.Count&&rows[n+1]==last+1){last=rows[++n];}ranges.Add(c+first+(last==first?"":":"+c+last));}return string.Join(",",ranges);
         }
+        // The largest value of a field over the records of a volume. A volume of more than 60 records is found by its key in a range,
+        // so the formula stays within the 255 arguments and 8192 characters of Excel.
+        static string GroupMax(int h,int rn,int col,List<int> indices) {
+            if(indices.Count<=60)return "MAX("+GroupCells(col,indices)+")";
+            int last=indices.Max()+7;return "_xlfn.AGGREGATE(14,6,"+LocalRange(col,7,last)+"/("+LocalRange(h+28,7,last)+"="+MergeEngine.ExcelColumn(h+12)+rn+"),1)";
+        }
+        static string GroupCount(int h,int rn,int col,List<int> indices) {
+            if(indices.Count<=60)return "COUNT("+GroupCells(col,indices)+")";
+            int last=indices.Max()+7;return "SUMPRODUCT(("+LocalRange(h+28,7,last)+"="+MergeEngine.ExcelColumn(h+12)+rn+")*ISNUMBER("+LocalRange(col,7,last)+"))";
+        }
         // Excel limits a text constant in a formula to 255 characters.
         static string Literal(string s) {
             s=s??"";var parts=new List<string>();
@@ -67,24 +77,43 @@ namespace ReviewMerge {
             string numeric="VALUE(SUBSTITUTE("+normal+",\".\",MID(1/2,2,1)))";
             string single="IFERROR(IF(AND("+numeric+">0,"+numeric+"=INT("+numeric+"),"+numeric+"<1000000),"+item+"&TEXT("+numeric+",\"0\")&\";\",\"\"),\"\")";
             string live="IF("+normal+"=\"\",\"\",IF(ISERROR(FIND(\"-\","+normal+")),IF(ISERROR(FIND(\",\","+normal+")),"+single+","+list+"),IF(ISERROR(FIND(\",\","+normal+")),"+range+",\"\")))";
-            if(keys.Count==0||Rules.PlainBoxNumber(value))return live;
+            if(Text(value)==""||Rules.PlainBoxNumber(value))return live;
+            // Text without a box number ("б/н", "н/д") gives no box while it is unchanged, as in Rules.ParseBoxes.
+            string same="IF("+Rules.ExcelText(box)+"="+Literal(ExcelTrim(Convert.ToString(value,Inv)))+",";
+            if(keys.Count==0)return same+"\"\","+live+")";
             string template=string.Concat(keys.Select(k=>"@"+k.Substring(k.IndexOf('|')+1)))+";";
-            return "IF(TRIM("+box+")="+Literal(Regex.Replace(Text(value)," +"," "))+",SUBSTITUTE("+Literal(template)+",\"@\","+item+"),"+live+")";
+            return same+"SUBSTITUTE("+Literal(template)+",\"@\","+item+"),"+live+")";
         }
         static readonly string[][] BoxSigns={new[]{"КОРОБА",""},new[]{"КОРОБ",""},new[]{"КОР.",""},new[]{"К.",""},new[]{"№",""},new[]{" И ",","},new[]{"И",","},new[]{";",","},new[]{"/",","},new[]{"–","-"},new[]{"—","-"},new[]{" ",""},new[]{",,",","}};
+        // The text as Rules.ExcelText gives it: no-break and other pasted spaces, tabs and line breaks become spaces, then TRIM.
+        static string ExcelTrim(string s) {
+            foreach(char c in new[]{'\u00a0','\t','\n','\r','\u202f','\u2007'})s=s.Replace(c,' ');
+            return Regex.Replace(s," +"," ").Trim(' ');
+        }
         // L of the main sheet as "45,46" or "45-48": upper case, words "короб", "кор.", "к." and "№" removed, "и", ";", "/" read as commas.
         static string BoxNormalFormula(string box) {
-            string f="UPPER("+box+"&\"\")";foreach(var pair in BoxSigns)f="SUBSTITUTE("+f+",\""+pair[0]+"\",\""+pair[1]+"\")";
+            string f="UPPER("+Rules.ExcelText(box)+")";foreach(var pair in BoxSigns)f="SUBSTITUTE("+f+",\""+pair[0]+"\",\""+pair[1]+"\")";
             // Canonical numeric tokens in lists and ranges, too: "к. №02", "02,003", "002-004" use boxes 2,3,4.
             f="\",\"&"+f;for(int i=0;i<6;i++)f="SUBSTITUTE(SUBSTITUTE("+f+",\",0\",\",\"),\"-0\",\"-\")";
             return "REPLACE("+f+",1,1,\"\")";
         }
         static string BoxNormal(object value) {
-            string t=(value is double?((double)value).ToString(Inv):Text(value)).ToUpperInvariant();foreach(var pair in BoxSigns)t=t.Replace(pair[0],pair[1]);
+            string t=(value is double?((double)value).ToString(Inv):ExcelTrim(value==null?"":Convert.ToString(value,Inv))).ToUpperInvariant();foreach(var pair in BoxSigns)t=t.Replace(pair[0],pair[1]);
             t=","+t;for(int i=0;i<6;i++)t=t.Replace(",0",",").Replace("-0","-");return t.Substring(1);
         }
+        // A new <mergeCells> goes after the elements that the worksheet schema puts before it (an autoFilter of the user, for example).
+        static XElement MergeCells(XDocument doc) {
+            var merges=doc.Root.Element(N+"mergeCells");if(merges!=null)return merges;merges=new XElement(N+"mergeCells");
+            var before=new[]{"sheetData","sheetCalcPr","sheetProtection","protectedRanges","scenarios","autoFilter","sortState","dataConsolidate","customSheetViews"};
+            doc.Root.Elements().Last(e=>e.Name.Namespace==N&&before.Contains(e.Name.LocalName)).AddAfterSelf(merges);return merges;
+        }
+        // <dimension> is optional in a sheet made by another program; it goes after <sheetPr>.
+        static XElement Dimension(XDocument doc) {
+            var dimension=doc.Root.Element(N+"dimension");if(dimension!=null)return dimension;dimension=new XElement(N+"dimension");
+            var sheetPr=doc.Root.Element(N+"sheetPr");if(sheetPr!=null)sheetPr.AddAfterSelf(dimension);else doc.Root.AddFirst(dimension);return dimension;
+        }
         static void MergeTitle(XDocument doc,int row,int end) {
-            var merges=doc.Root.Element(N+"mergeCells");if(merges==null){merges=new XElement(N+"mergeCells");doc.Root.Element(N+"sheetData").AddAfterSelf(merges);}
+            var merges=MergeCells(doc);
             merges.Elements().Where(e=>((string)e.Attribute("ref")??"").StartsWith("A"+row+":",StringComparison.Ordinal)).Remove();
             if(end>1)merges.Add(new XElement(N+"mergeCell",new XAttribute("ref","A"+row+":"+MergeEngine.ExcelColumn(end)+row)));
             merges.SetAttributeValue("count",merges.Elements().Count());
@@ -95,9 +124,11 @@ namespace ReviewMerge {
             bool formatted=previous!=null&&previous.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>(int)r.Attribute("r")<=10).Any(r=>
                 XlsxReader.Normal(Value(r.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==1)))=="ЭТАП"&&
                 XlsxReader.Normal(Value(r.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==2))).Contains("ДАТА"));
+            // The dates of an old «Свод» are its columns. A date after the report date without checks is not a day of the recreated reports:
+            // the next build would not have it.
             var calendar=new List<double>();
             if(reference)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Where(e=>(int)e.Attribute("r")==5).Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r")))) {
-                if(Column((string)cell.Attribute("r"))<2)continue;double? d=XlsxReader.DateSerial(Value(cell));if(d.HasValue)calendar.Add(d.Value);
+                if(Column((string)cell.Attribute("r"))<2)continue;double? d=XlsxReader.DateSerial(Value(cell));if(d.HasValue&&(options.KeepLegacyReport||d.Value<=asOf.ToOADate()||dates.Contains(d.Value)))calendar.Add(d.Value);
             }
             if(calendar.Count==0)calendar.AddRange(result.Dates.Where(d=>d.DayOfWeek!=DayOfWeek.Saturday&&d.DayOfWeek!=DayOfWeek.Sunday||d.Date==asOf.Date||dates.Contains(d.ToOADate())).Select(d=>d.ToOADate()));
             if(!calendar.Contains(asOf.ToOADate()))calendar.Add(asOf.ToOADate());calendar=reference?calendar.Distinct().ToList():calendar.Distinct().OrderBy(d=>d).ToList();
@@ -136,7 +167,7 @@ namespace ReviewMerge {
                 string normal=MergeEngine.ExcelColumn(h+30)+rn,item=MergeEngine.ExcelColumn(h+48)+rn,kindRef=MergeEngine.ExcelColumn(h+8)+rn;
                 g.Set(rn,h+30,BoxNormal(row.Values[11]),bodyStyle,BoxNormalFormula(box));g.Set(rn,h+48,";"+Rules.Kind(row.Values[10])+"|",bodyStyle,"IF(TRIM("+kindRef+")=\"\",\";Не указан|\",\";\"&UPPER(TRIM("+kindRef+"))&\"|\")");
                 g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(box,normal,item,numbers,row.Values[11],keys[i]));
-                g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+nameTable+",3,FALSE),"+rawRef+"))");
+                g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+Exact(rawRef)+","+nameTable+",3,FALSE),"+rawRef+"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\",LEN("+Rules.ExcelText(who)+")>0),1,0)");
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">=36526,"+date+"<109575),INT("+date+"),\"\")");
                 string marks=MainCell(name,mainColumns.Letter(13),mr)+":"+mainColumns.Letter(18)+mr;
@@ -147,13 +178,14 @@ namespace ReviewMerge {
                 g.Set(rn,h+49,resolvedColumn>0&&Rules.IsResolved(row.Resolved)?1:0,intStyle,Rules.ResolvedFormula(resolvedCell));
                 // Reviewers and boxes typed in the main sheet after the build: the first row of each that the reference sheet does not list yet.
                 string boxRef=MergeEngine.ExcelColumn(h)+rn;
-                g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+rawRef+")>0,0,IF(MATCH("+rawRef+","+rawNames+",0)="+(i+1)+",1,0)))");
+                g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+Exact(rawRef)+")>0,0,IF(MATCH("+Exact(rawRef)+","+rawNames+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+25,0,intStyle,"IF(OR("+boxRef+"=\"\",LEN("+boxRef+")-LEN(SUBSTITUTE("+boxRef+",\";\",\"\"))<>2),0,IF(COUNTIF("+knownBoxes+","+boxRef+")>0,0,IF(MATCH("+boxRef+","+boxLists+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+28,volumeKeys[i],bodyStyle);
                 // A filled S or T field is one remark, however many items its text has; T is not a remark when the option says so.
                 for(int t=0;t<2;t++){string source=MainCell(name,mainColumns.Letter(19+t),mr);bool remark=t==0||options.NotesCount;g.Set(rn,h+23+t,remark&&Text(row.Values[18+t])!=""?1:0,intStyle,remark?"IF(LEN("+Rules.ExcelText(source)+")>0,1,0)":null);}
                 for(int t=0;t<6;t++)g.Set(rn,h+31+t,Rules.IsRemarkMark(row.Values[12+t])?1:0,intStyle,Rules.RemarkMarkFormula(MainCell(name,mainColumns.Letter(13+t),mr)));
-                g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+Rules.ExcelText(kind)+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,Rules.ExcelText(who));g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
+                // The file name is cached as the cell holds it: with its spaces, and a number stays a number.
+                g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+Rules.ExcelText(kind)+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,Rules.ExcelText(who));g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,row.Values[2] is double||row.Values[2] is string?row.Values[2]:Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
             }
             var volumes=referenceLayout.VolumeGroups;
             var volumeDates=new List<double?>();var volumeIssues=new List<int>();var counted=new List<bool>();var typeCounts=new List<int[]>();
@@ -164,16 +196,15 @@ namespace ReviewMerge {
                 // A group made only of ИУЛ is not a volume: its files and remarks are counted, the volume is not.
                 int rn=j+7;var indices=volumes[j];var record=referenceLayout.Volumes[j];double? d=record.Date;int issue=record.Issue;bool isVolume=record.IsVolume;
                 volumeDates.Add(d);volumeIssues.Add(issue);counted.Add(isVolume);var counts=new int[8];typeCounts.Add(counts);
-                string dateCells=GroupCells(h+4,indices),issueCells=GroupCells(h+5,indices);
-                g.Set(rn,vh,volumeKeys[indices[0]],bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF(COUNT("+dateCells+")="+indices.Count+",MAX("+dateCells+"),\"\")");g.Set(rn,vh+2,issue,intStyle,"MAX("+issueCells+")");g.Set(rn,h+2,isVolume?1:0,intStyle);
+                g.Set(rn,vh,volumeKeys[indices[0]],bodyStyle);g.Set(rn,vh+1,d.HasValue?(object)d.Value:"",dateStyle,"IF("+GroupCount(h,rn,h+4,indices)+"="+indices.Count+","+GroupMax(h,rn,h+4,indices)+",\"\")");g.Set(rn,vh+2,issue,intStyle,GroupMax(h,rn,h+5,indices));g.Set(rn,h+2,isVolume?1:0,intStyle);
                 // Remarks of the volume are resolved when any of its parts (the volume, a fragment or its ИУЛ) is marked in «Замечания устранены».
                 record.Resolved=issue==1&&resolvedColumn>0&&indices.Any(i=>Rules.IsResolved(result.Rows[i].Resolved))?1:0;
-                string marked="MAX("+GroupCells(h+49,indices)+")";if(marked.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumeKeys[indices[0]]);
+                string marked=GroupMax(h,rn,h+49,indices);if(marked.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumeKeys[indices[0]]);
                 g.Set(rn,h+50,record.Resolved,intStyle,"IF(AND("+MergeEngine.ExcelColumn(vh+2)+rn+"=1,"+marked+"=1),1,0)");
                 // Every type counts once per volume: a mark M:R or a filled field S:T in any of its parts.
                 for(int t=0;t<8;t++) {
                     int col=t<6?12+t:18+t-6;counts[t]=t==7&&!options.NotesCount?0:indices.Any(i=>t<6?Text(result.Rows[i].Values[col])=="1":Text(result.Rows[i].Values[col])!="")?1:0;
-                    string f="MAX("+GroupCells(t<6?h+31+t:h+23+t-6,indices)+")";
+                    string f=GroupMax(h,rn,t<6?h+31+t:h+23+t-6,indices);
                     if(f.Length>8192)throw new System.IO.InvalidDataException("Слишком много фрагментов в одном томе для формулы Excel: "+volumeKeys[indices[0]]);
                     g.Set(rn,vh+3+t,counts[t],intStyle,f);
                 }
@@ -237,7 +268,7 @@ namespace ReviewMerge {
             MoveSummaryStatistics(g,end);
             XDocument doc=reference?new XDocument(previous):Sheet(g,new[]{Col(1,1,35),Col(2,end,11)},false,end);
             if(reference)doc.Root.Element(N+"sheetData").ReplaceWith(g.Data());
-            var dimension=doc.Root.Element(N+"dimension");dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(Math.Max(end,g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(end).Max()))+g.Rows.Keys.Max());
+            var dimension=Dimension(doc);dimension.SetAttributeValue("ref","A1:"+MergeEngine.ExcelColumn(Math.Max(end,g.Rows.Values.SelectMany(r=>r.Keys).DefaultIfEmpty(end).Max()))+g.Rows.Keys.Max());
             var columns=doc.Root.Element(N+"cols");if(columns==null){columns=new XElement(N+"cols");doc.Root.Element(N+"sheetData").AddBeforeSelf(columns);}
             var visible=reference?columns.Elements().Where(e=>(int)e.Attribute("min")<=end).Select(e=>new XElement(e)).ToList():new List<XElement>{Col(1,1,35),Col(2,end,11)};
             foreach(var col in visible)if((int)col.Attribute("max")>end)col.SetAttributeValue("max",end);
@@ -298,7 +329,7 @@ namespace ReviewMerge {
         void WritePhysicalTotals(Grid g,XDocument previous,bool reference,List<double> calendar,DateTime asOf,int[] defaults,int label,int number,int greenLabel,int greenNumber,int orangeLabel,int orangeNumber,string cr,string xr,string yr,string vdr,string isv,MergeResult result,List<double?> dates) {
             string physicalPath=PathFor("Справка по томам");var physical=physicalPath==null?null:Xml(physicalPath);bool usePhysical=physical!=null&&XlsxReader.Normal(Value(At(physical,1,1))).Contains("КОРОБ");
             if(!reference) {string[] labels=usePhysical?new[]{"Получено коробов","Кол-во томов по акту","Проверено коробов нарастающим итогом","Проверено томов нарастающим итогом","Осталось проверить коробов","Осталось проверить томов","Дельта за сутки проверенных коробов","Дельта за сутки проверенных томов"}:new[]{"Коробов указано в реестре","Файлов в реестре","Коробов с проверенными файлами","Проверено файлов нарастающим итогом","Коробов без проверенных файлов","Осталось проверить файлов","Впервые отмечено коробов за сутки","Впервые проверено файлов за сутки"};for(int r=7;r<=14;r++){g.Set(r,1,labels[r-7],r==9||r==10?greenLabel:r==11||r==12?orangeLabel:label);g.Heights[r]=32;}}
-            var l=referenceLayout;string boxDates="'Справка по томам'!"+LocalRange(6,l.ManifestStart,l.ManifestEnd),boxNumbers="'Справка по томам'!"+LocalRange(2,l.ManifestStart,l.ManifestEnd);
+            var l=referenceLayout;string boxDates="'Справка по томам'!"+LocalRange(6,l.ManifestStart,l.ManifestEnd);
             var previousSums=new double[2];
             for(int i=0;i<calendar.Count;i++) {
                 int c=i+2;string cs=MergeEngine.ExcelColumn(c),prev=MergeEngine.ExcelColumn(c-1),d=cs+"$5";double serial=calendar[i];
@@ -319,7 +350,7 @@ namespace ReviewMerge {
                 } else if(!reference) {
                     // Boxes come from the box table of the reference sheet, where a list cell such as "45 и 46" gives two boxes.
                     int checkedCount=dates.Count(v=>v.HasValue&&v.Value<=serial),boxCount=l.Completed.Count(v=>v.Value.HasValue&&v.Value.Value<=serial);
-                    g.Set(7,c,l.BoxCount,number,"COUNT("+boxNumbers+")");g.Set(8,c,result.Documents,number,"COUNTA("+cr+")");g.Set(9,c,boxCount,greenNumber,"COUNTIFS("+boxDates+",\">0\","+boxDates+",\"<=\"&"+d+")");g.Set(10,c,checkedCount,greenNumber,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+d+")");g.Set(11,c,l.BoxCount-boxCount,orangeNumber,cs+"7-"+cs+"9");g.Set(12,c,result.Documents-checkedCount,orangeNumber,cs+"8-"+cs+"10");g.Set(13,c,l.Completed.Count(v=>v.Value==serial),number,"COUNTIF("+boxDates+","+d+")");g.Set(14,c,dates.Count(v=>v==serial),number,"COUNTIF("+yr+","+d+")");
+                    g.Set(7,c,l.BoxCount,number,RegisterBoxes());g.Set(8,c,result.Documents,number,"COUNTA("+cr+")");g.Set(9,c,boxCount,greenNumber,"COUNTIFS("+boxDates+",\">0\","+boxDates+",\"<=\"&"+d+")");g.Set(10,c,checkedCount,greenNumber,"COUNTIFS("+xr+",1,"+yr+",\">0\","+yr+",\"<=\"&"+d+")");g.Set(11,c,l.BoxCount-boxCount,orangeNumber,cs+"7-"+cs+"9");g.Set(12,c,result.Documents-checkedCount,orangeNumber,cs+"8-"+cs+"10");g.Set(13,c,l.Completed.Count(v=>v.Value==serial),number,"COUNTIF("+boxDates+","+d+")");g.Set(14,c,dates.Count(v=>v==serial),number,"COUNTIF("+yr+","+d+")");
                 }
             }
         }
