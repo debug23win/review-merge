@@ -7,15 +7,16 @@ using System.Xml.Linq;
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
         static string ShiftColumnAddress(string value) {
-            return Regex.Replace(value??"",@"(?<d>\$?)(?<c>[A-Z]{1,3})(?=\$?\d+|:|$)",m=>{
+            return Regex.Replace(value??"",@"(?<![\p{L}\p{N}_])(?<d>\$?)(?<c>[A-Z]{1,3})(?=\$?\d+|:|$|[\s,])",m=>{
                 int col=Column(m.Groups["c"].Value);if(col<13)return m.Value;
                 if(col>=16384)throw new System.IO.InvalidDataException("Недостаточно столбцов Excel для добавления номера тома.");
                 return m.Groups["d"].Value+MergeEngine.ExcelColumn(col+1);
             });
         }
         static string ShiftMainFormula(string formula,string sheetName,bool local) {
-            return Regex.Replace(formula??"",@"""(?:[^""]|"""")*""|(?<![\p{L}\p{N}_])(?:(?<sheet>'(?:[^']|'')+'|[\p{L}_][\p{L}\p{N}_. ]*)!)?(?<a>\$?[A-Z]{1,3}\$?\d+)(?::(?<b>\$?[A-Z]{1,3}\$?\d+))?",m=>{
+            return Regex.Replace(formula??"",@"""(?:[^""]|"""")*""|(?<![\p{L}\p{N}_])(?:(?<sheet>'(?:[^']|'')+'|[\p{L}_][\p{L}\p{N}_. ]*)!)?(?<a>\$?[A-Z]{1,3}(?:\$?\d+)?)(?::(?<b>\$?[A-Z]{1,3}(?:\$?\d+)?))?(?![\p{L}\p{N}_.]|\s*\()",m=>{
                 if(!m.Groups["a"].Success)return m.Value;
+                if(!Regex.IsMatch(m.Groups["a"].Value,@"\d")&&!m.Groups["b"].Success)return m.Value;
                 string sheet=m.Groups["sheet"].Value.Trim('\'').Replace("''","'");
                 if(sheet==""&&!local||sheet!=""&&!string.Equals(sheet,sheetName,StringComparison.OrdinalIgnoreCase))return m.Value;
                 string prefix=m.Groups["sheet"].Success?m.Groups["sheet"].Value+"!":"";
@@ -38,8 +39,9 @@ namespace ReviewMerge {
             if(cols==null){cols=new XElement(N+"cols");main.Root.Element(N+"sheetData").AddBeforeSelf(cols);}
             foreach(var c in cols.Elements().ToList()) {
                 int min=(int)c.Attribute("min"),max=(int)c.Attribute("max");
-                if(min>=13){c.SetAttributeValue("min",min+1);c.SetAttributeValue("max",max+1);}
-                else if(max>=13){var tail=new XElement(c);tail.SetAttributeValue("min",14);tail.SetAttributeValue("max",max+1);c.SetAttributeValue("max",12);c.AddAfterSelf(tail);}
+                if(min>=16384){c.Remove();continue;}
+                if(min>=13){c.SetAttributeValue("min",min+1);c.SetAttributeValue("max",Math.Min(16384,max+1));}
+                else if(max>=13){var tail=new XElement(c);tail.SetAttributeValue("min",14);tail.SetAttributeValue("max",Math.Min(16384,max+1));c.SetAttributeValue("max",12);c.AddAfterSelf(tail);}
             }
             cols.Add(Col(13,13,14));var sorted=cols.Elements().OrderBy(c=>(int)c.Attribute("min")).ToList();sorted.Remove();cols.Add(sorted);
             var title=rows.First(r=>(int)r.Attribute("r")==header);SetCell(title,Cell(header,13,"Номер тома",headerStyle));

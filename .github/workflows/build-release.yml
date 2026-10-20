@@ -42,6 +42,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PDF report tests failed' }
           python tests/test_remarks_summary.py
           if ($LASTEXITCODE -ne 0) { throw 'Remarks summary tests failed' }
+          python tests/test_pd_recheck.py
+          if ($LASTEXITCODE -ne 0) { throw 'PD recheck tests failed' }
+          python tests/test_dpi.py
+          if ($LASTEXITCODE -ne 0) { throw 'Window DPI tests failed' }
           python tests/test_history.py
           if ($LASTEXITCODE -ne 0) { throw 'History tests failed' }
           python tests/test_rd.py

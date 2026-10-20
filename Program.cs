@@ -105,7 +105,7 @@ namespace ReviewMerge {
         public MainForm() {
             Text="Свод проверки документации"; Font=new Font("Segoe UI",10); BackColor=Color.FromArgb(246,248,250);
             ClientSize=new Size(1060,820);MinimumSize=new Size(980,815);StartPosition=FormStartPosition.CenterScreen;
-            AutoScaleMode=AutoScaleMode.Dpi;AllowDrop=true;
+            AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;AllowDrop=true;
             var layout=new TableLayoutPanel { Dock=DockStyle.Fill,Padding=new Padding(22),ColumnCount=1,RowCount=4 };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,43));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,50));
             Controls.Add(layout);

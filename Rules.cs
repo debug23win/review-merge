@@ -81,7 +81,33 @@ namespace ReviewMerge {
             return result;
         }
         // «Замечания устранены»: 1, a date or any other mark; empty, 0 and «нет» are not a mark. The Справка formula mirrors this.
-        public static bool IsResolved(object value) { string s = Text(value); return s != "" && s != "0" && XlsxReader.Normal(value) != "НЕТ"; }
+        public static bool IsResolved(object value) {
+            if (value is bool) return (bool)value;
+            string s = CleanName(value); double number;
+            if (s == "" || XlsxReader.Normal(s) == "НЕТ") return false;
+            return !double.TryParse(s.Replace(',', '.'), NumberStyles.Float, Inv, out number) || number != 0;
+        }
+        public static bool IsRemarkMark(object value) {
+            if (value is bool) return (bool)value;
+            double number; return double.TryParse(Text(value).Replace(',', '.'), NumberStyles.Float, Inv, out number) && number == 1;
+        }
+        // Keep the saved cache and live Excel calculations consistent on pasted whitespace.
+        public static string ExcelText(string cell) {
+            string s = cell + "&\"\"";
+            foreach (string token in new[]{"CHAR(160)","CHAR(9)","CHAR(10)","CHAR(13)","\"\u202f\"","\"\u2007\""})
+                s = "SUBSTITUTE(" + s + "," + token + ",\" \")";
+            return "TRIM(" + s + ")";
+        }
+        static string ExcelNumber(string text) {
+            return "VALUE(SUBSTITUTE(SUBSTITUTE(" + text + ",\".\",MID(1/2,2,1)),\",\",MID(1/2,2,1)))";
+        }
+        public static string ResolvedFormula(string cell) {
+            string s = ExcelText(cell);
+            return "IF(ISLOGICAL(" + cell + "),IF(" + cell + ",1,0),IF(OR(" + s + "=\"\",UPPER(" + s + ")=\"НЕТ\",IFERROR(" + ExcelNumber(s) + ",1)=0),0,1))";
+        }
+        public static string RemarkMarkFormula(string cell) {
+            return "IF(ISLOGICAL(" + cell + "),IF(" + cell + ",1,0),IFERROR(IF(" + ExcelNumber(ExcelText(cell)) + "=1,1,0),0))";
+        }
         public const string ResolvedHeader = "Замечания устранены";
         // "Замечания устранены", "Замечание устранено" or "Устранено"; "Срок устранения" is another column.
         public static bool IsResolvedHeader(object header) { return Regex.IsMatch(XlsxReader.Normal(header), @"^(?:ЗАМЕЧАНИ[ЕЯ] )?УСТРАНЕН[ОЫ]?(?![\p{L}\p{N}])"); }
@@ -108,7 +134,7 @@ namespace ReviewMerge {
             for (int i = 0; i < 2; i++) {
                 name = Regex.Replace(name, @"\s*[\(\[ _,\-]*(?<![\p{L}\p{N}])(?:ФРАГМЕНТ|ЧАСТЬ|БРОШЮРА)\s*(?:№|N)?\s*\d+(?:\.\d+)*(?:\s*ИЗ\s*\d+)?[\)\]]*", "");
                 name = Regex.Replace(name, @"[\(\[ _,\-]+ИЗМ[.\s]*\d+[\)\]]*$", "");
-                name = Regex.Replace(name, @"[-_ ]+[\(\[]?И?УЛ[\)\]]?(?:[-_ ]+[\p{L}\p{N}]+)?$", "");
+                name = Regex.Replace(name, @"[-_ ]+[\(\[]?И?УЛ[\)\]]?(?:[-_][\p{L}\p{N}]+)*$", "");
             }
             return Regex.Replace(name, @"\s+", " ").Trim();
         }
@@ -118,7 +144,7 @@ namespace ReviewMerge {
         // that join files of different names.
         public static List<string> VolumeKeys(IList<MergedRow> rows, List<string> notes = null) {
             var names = rows.Select(r => VolumeKey(r.Values[2], r.Values[3])).ToList();
-            var numbers = rows.Select(r => { string n = XlsxReader.Normal(r.VolumeNumber); return Regex.IsMatch(n, @"^(?:Б\s*/?\s*Н|БЕЗ НОМЕРА|НЕТ|[-–—]+)\.?$") ? "" : n; }).ToList();
+            var numbers = rows.Select(r => { string n = XlsxReader.Normal(r.VolumeNumber); return Regex.IsMatch(n, @"^(?:(?:Б\s*/?\s*Н|БЕЗ НОМЕРА)(?:\s*\d+)?|НЕТ|[-–—]+)\.?$") ? "" : n; }).ToList();
             var numbersOfName = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
             for (int i = 0; i < rows.Count; i++) {
                 if (numbers[i] == "") continue;
@@ -140,7 +166,7 @@ namespace ReviewMerge {
         }
         // ИУЛ is a part of a volume, never a volume of its own: "…-УЛ", "…-ИУЛ", "…-УЛ-ГТСС1".
         public static bool IsUl(object file, object ext) {
-            return Regex.IsMatch(FileStem(file, ext), @"(?:^|[-_ \(\[])И?УЛ(?:$|[-_ \)\]])");
+            return Regex.IsMatch(FileStem(file, ext), @"(?:^|[-_ \(\[])И?УЛ[\)\]]?(?:[-_][\p{L}\p{N}]+)*$");
         }
 
         // Excel may omit row and cell addresses; number them the way Excel reads them.

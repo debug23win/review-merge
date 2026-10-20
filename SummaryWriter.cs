@@ -138,21 +138,22 @@ namespace ReviewMerge {
                 g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(box,normal,item,numbers,row.Values[11],keys[i]));
                 g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+rawRef+","+nameTable+",3,FALSE),"+rawRef+"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\","+who+"<>\"\"),1,0)");
-                g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">0),INT("+date+"),\"\")");
+                g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">=36526,"+date+"<109575),INT("+date+"),\"\")");
                 string marks=MainCell(name,mainColumns.Letter(13),mr)+":"+mainColumns.Letter(18)+mr;
-                g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+marks+",1)>0,COUNTIF("+marks+",\"?*\")>0,"+MainCell(name,mainColumns.Letter(19),mr)+"<>\"\""+(options.NotesCount?","+MainCell(name,mainColumns.Letter(20),mr)+"<>\"\"":"")+"),1,0)");
+                string normalizedMarks=MergeEngine.ExcelColumn(h+31)+rn+":"+MergeEngine.ExcelColumn(h+36)+rn;
+                g.Set(rn,h+5,issues[i],intStyle,"IF(OR(COUNTIF("+normalizedMarks+",1)>0,LEN("+Rules.ExcelText(MainCell(name,mainColumns.Letter(19),mr))+")>0"+(options.NotesCount?",LEN("+Rules.ExcelText(MainCell(name,mainColumns.Letter(20),mr))+")>0":"")+"),1,0)");
                 // A mark in «Замечания устранены» (anything but empty, 0 or «нет»); mirrors Rules.IsResolved.
-                string resolvedCell="TRIM("+(resolvedColumn>0?MainCell(name,MergeEngine.ExcelColumn(resolvedColumn),mr):"\"\"")+")";
-                g.Set(rn,h+49,resolvedColumn>0&&Rules.IsResolved(row.Resolved)?1:0,intStyle,"IF(OR("+resolvedCell+"=\"\","+resolvedCell+"=\"0\",UPPER("+resolvedCell+")=\"НЕТ\"),0,1)");
+                string resolvedCell=resolvedColumn>0?MainCell(name,MergeEngine.ExcelColumn(resolvedColumn),mr):"\"\"";
+                g.Set(rn,h+49,resolvedColumn>0&&Rules.IsResolved(row.Resolved)?1:0,intStyle,Rules.ResolvedFormula(resolvedCell));
                 // Reviewers and boxes typed in the main sheet after the build: the first row of each that the reference sheet does not list yet.
                 string boxRef=MergeEngine.ExcelColumn(h)+rn;
                 g.Set(rn,h+7,0,intStyle,"IF("+rawRef+"=\"\",0,IF(COUNTIF("+knownNames+","+rawRef+")>0,0,IF(MATCH("+rawRef+","+rawNames+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+25,0,intStyle,"IF(OR("+boxRef+"=\"\",LEN("+boxRef+")-LEN(SUBSTITUTE("+boxRef+",\";\",\"\"))<>2),0,IF(COUNTIF("+knownBoxes+","+boxRef+")>0,0,IF(MATCH("+boxRef+","+boxLists+",0)="+(i+1)+",1,0)))");
                 g.Set(rn,h+28,volumeKeys[i],bodyStyle);
                 // A filled S or T field is one remark, however many items its text has; T is not a remark when the option says so.
-                for(int t=0;t<2;t++){string source=MainCell(name,mainColumns.Letter(19+t),mr);bool remark=t==0||options.NotesCount;g.Set(rn,h+23+t,remark&&Text(row.Values[18+t])!=""?1:0,intStyle,remark?"IF(LEN(TRIM("+source+"))>0,1,0)":null);}
-                for(int t=0;t<6;t++)g.Set(rn,h+31+t,Text(row.Values[12+t])=="1"?1:0,intStyle,"IF(COUNTIF("+MainCell(name,mainColumns.Letter(13+t),mr)+",1)>0,1,0)");
-                g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+kind+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,"IF(TRIM("+who+")=\"\",\"\",TRIM("+who+"))");g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
+                for(int t=0;t<2;t++){string source=MainCell(name,mainColumns.Letter(19+t),mr);bool remark=t==0||options.NotesCount;g.Set(rn,h+23+t,remark&&Text(row.Values[18+t])!=""?1:0,intStyle,remark?"IF(LEN("+Rules.ExcelText(source)+")>0,1,0)":null);}
+                for(int t=0;t<6;t++)g.Set(rn,h+31+t,Rules.IsRemarkMark(row.Values[12+t])?1:0,intStyle,Rules.RemarkMarkFormula(MainCell(name,mainColumns.Letter(13+t),mr)));
+                g.Set(rn,h+8,Text(row.Values[10]),bodyStyle,"IF("+kind+"=\"\",\"\","+Rules.ExcelText(kind)+")");g.Set(rn,h+9,Rules.CleanName(row.Values[8]),bodyStyle,Rules.ExcelText(who));g.Set(rn,h+10,mr,intStyle);g.Set(rn,h+11,Text(row.Values[2]),bodyStyle,"IF("+file+"=\"\",\"\","+file+")");
             }
             var volumes=referenceLayout.VolumeGroups;
             var volumeDates=new List<double?>();var volumeIssues=new List<int>();var counted=new List<bool>();var typeCounts=new List<int[]>();

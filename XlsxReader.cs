@@ -60,7 +60,9 @@ namespace ReviewMerge {
             return value == null ? "" : Convert.ToString(value, Inv).Trim();
         }
         public static string Normal(object value) {
-            return Regex.Replace(Text(value).Normalize(NormalizationForm.FormKC), @"\s+", " ").ToUpperInvariant();
+            string s = Text(value);
+            s = s.IndexOf('№') < 0 ? s.Normalize(NormalizationForm.FormKC) : string.Join("№", s.Split('№').Select(p => p.Normalize(NormalizationForm.FormKC)));
+            return Regex.Replace(s, @"\s+", " ").ToUpperInvariant();
         }
         public static double? DateSerial(object value) {
             if (value == null || Text(value) == "") return null;
@@ -71,8 +73,8 @@ namespace ReviewMerge {
                 return null;
             }
             DateTime dt;
-            var s = Regex.Replace(Text(value), @"\s*(?:г\.?|года)\s*$", "", RegexOptions.IgnoreCase);
-            var formats = new [] { "dd.MM.yyyy", "d.M.yyyy", "dd.MM.yy", "yyyy-MM-dd", "dd/MM/yyyy", "dd.MM.yyyy HH:mm", "yyyy-MM-ddTHH:mm:ss" };
+            var s = Regex.Replace(Text(value), @"\s*(?:г\.?|года)\s*$", "", RegexOptions.IgnoreCase).TrimEnd('.');
+            var formats = new [] { "dd.MM.yyyy", "d.M.yyyy", "dd.MM.yy", "d.M.yy", "yyyy-MM-dd", "dd/MM/yyyy", "d/M/yyyy", "dd.MM.yyyy HH:mm", "d.M.yyyy H:mm", "d.M.yyyy H:mm:ss", "yyyy-MM-ddTHH:mm:ss" };
             if (DateTime.TryParseExact(s, formats, new CultureInfo("ru-RU"), DateTimeStyles.AllowWhiteSpaces, out dt))
                 return dt.Year >= 2000 && dt.Year < 2200 ? (double?)dt.Date.ToOADate() : null;
             if (Regex.IsMatch(s,@"^\d{4}-\d{2}-\d{2}") && DateTime.TryParse(s,Inv,DateTimeStyles.RoundtripKind,out dt))
@@ -83,20 +85,22 @@ namespace ReviewMerge {
         }
         static string TimeKey(object value) {
             double n;
-            if (value is double && (n = (double)value) >= 0 && n < 1)
-                return DateTime.FromOADate(n).ToString("HH:mm:ss", Inv);
+            if (value is double && (n = (double)value) >= 0)
+                return DateTime.FromOADate(n - Math.Floor(n)).ToString("HH:mm:ss", Inv);
             DateTime dt;
-            if (DateTime.TryParseExact(Text(value), new [] { "H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss" }, Inv, DateTimeStyles.None, out dt))
+            if (DateTime.TryParseExact(Text(value), new [] { "H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss", "d.M.yyyy H:mm", "d.M.yyyy H:mm:ss", "yyyy-MM-ddTHH:mm:ss" }, Inv, DateTimeStyles.None, out dt))
                 return dt.ToString("HH:mm:ss", Inv);
             return Normal(value);
         }
         public static string Key(SourceRow row) {
             string filename = Normal(row.Values[2]);
-            string extension = Normal(row.Values[3]);
+            string extension = Normal(row.Values[3]).TrimStart('.');
             if (extension != "" && filename.EndsWith("." + extension, StringComparison.Ordinal))
                 filename = filename.Substring(0, filename.Length - extension.Length - 1);
             double? date = DateSerial(row.Values[5]);
-            return string.Join("\u001f", new [] { filename, extension, Normal(row.Values[7]),
+            string crc = Normal(row.Values[7]);
+            if (Regex.IsMatch(crc, @"^[0-9A-F]{1,8}$")) crc = crc.PadLeft(8, '0');
+            return string.Join("\u001f", new [] { filename, extension, crc,
                 date.HasValue ? date.Value.ToString(Inv) : Normal(row.Values[5]), TimeKey(row.Values[6]) });
         }
         static XDocument Load(ZipArchive z, string entryName) {
@@ -125,7 +129,8 @@ namespace ReviewMerge {
         static XDocument SheetXml(ZipArchive zip, string sheetName, out List<string> strings, out bool date1904) {
             var workbook = Load(zip, "xl/workbook.xml");
             strings = new List<string>();
-            date1904 = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904") == "1";
+            string dateSystem = (string)workbook.Root.Element(Ns + "workbookPr").NullAttribute("date1904");
+            date1904 = dateSystem == "1" || string.Equals(dateSystem, "true", StringComparison.OrdinalIgnoreCase);
             var sheet = workbook.Descendants(Ns + "sheet").FirstOrDefault(s =>
                 string.Equals(((string)s.Attribute("name") ?? "").Trim(), sheetName.Trim(), StringComparison.OrdinalIgnoreCase));
             if (sheet == null) return null;

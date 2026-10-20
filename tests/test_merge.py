@@ -34,7 +34,8 @@ def test_merge():
     temp.mkdir()
     result = temp/'result.xlsx'
     report = run(result, [ROOT/'tests/fixtures/Анна.xlsx', ROOT/'tests/fixtures/Борис.xlsx'])
-    assert (report['Documents'], report['Reviewed'], report['WithIssues'], report['Boxes']) == (7, 6, 4, 3), report
+    # The declined nonstandard mark «да» remains in the register, but is not a remark.
+    assert (report['Documents'], report['Reviewed'], report['WithIssues'], report['Boxes']) == (7, 6, 3, 3), report
     assert report['Conflicts'] == 11 and report['Problems'] == 3, report
     with zipfile.ZipFile(result) as z:
         wb = ET.fromstring(z.read('xl/workbook.xml'))
@@ -51,7 +52,7 @@ def test_merge():
             assert main[addr][0] == '1', (addr, main[addr])
     repeated = temp/'repeated.xlsx'
     rerun = run(repeated, [result, ROOT/'tests/fixtures/Анна.xlsx', ROOT/'tests/fixtures/Борис.xlsx'])
-    assert rerun['Documents'] == 7 and rerun['WithIssues'] == 4
+    assert rerun['Documents'] == 7 and rerun['WithIssues'] == 3
     with zipfile.ZipFile(result) as a, zipfile.ZipFile(repeated) as b:
         first = cells(a, 'xl/worksheets/sheet1.xml')
         second = cells(b, 'xl/worksheets/sheet1.xml')
@@ -69,7 +70,7 @@ def test_existing_target():
     before=target.read_bytes()
     source=ROOT/'tests/fixtures/Борис.xlsx';source_hash=hashlib.sha256(source.read_bytes()).hexdigest()
     report=run(target,[source,target,source])
-    assert report['Documents']==7 and report['WithIssues']==4,report
+    assert report['Documents']==7 and report['WithIssues']==3,report
     backups=list(temp.glob('existing.xlsx.backup-*'));assert len(backups)==1
     assert backups[0].read_bytes()==before
     assert hashlib.sha256(source.read_bytes()).hexdigest()==source_hash
