@@ -478,3 +478,4 @@ test_inserted_rows_keep_notes_and_box_counts()
 test_legacy_merges_do_not_hide_values()
 test_numbers_row_among_data()
 print('Merge tests passed: union, flags, comments, conflicts, invalid data, formulas, repeated merge, box lists, surnames, partly checked boxes, IUL, marks, wide days, live dates, new reviewers, names, suffixed IUL and inserted rows')
+
