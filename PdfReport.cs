@@ -74,11 +74,26 @@ namespace ReviewMerge {
                 CheckName(part.Item2);
                 var pdf=new PdfDocument("Свод проверки "+day);foreach(string sheet in part.Item1)book.Render(pdf,sheet,0,size[0],size[1]);data.Add(pdf.Save());
             }
-            var files=new List<PdfFile>();
-            try{for(int i=0;i<parts.Length;i++)files.Add(new PdfFile{Requested=parts[i].Item2,Path=Save(data[i],parts[i].Item2)});}
-            catch{foreach(var file in files)TryDelete(file.Path);throw;}
-            return files;
+            // All parts are written to temporary files first; the files they replace are kept aside until every part is in place,
+            // so a failure restores the earlier PDF instead of leaving none.
+            var temps=new List<string>();var placed=new List<string[]>();
+            try{
+                foreach(var part in parts){string folder=System.IO.Path.GetDirectoryName(part.Item2),temp=TempIn(folder);temps.Add(temp);
+                    try{File.WriteAllBytes(temp,data[temps.Count-1]);}
+                    catch(UnauthorizedAccessException){throw new IOException("нет доступа к папке «"+folder+"».");}
+                    catch(PathTooLongException){throw new IOException("путь к папке PDF слишком длинный: «"+folder+"».");}}
+                for(int i=0;i<parts.Length;i++)placed.Add(Place(temps[i],parts[i].Item2));
+            }
+            catch{
+                foreach(var p in placed){TryDelete(p[0]);if(p[1]!=null)try{File.Move(p[1],p[0]);}catch(IOException){}catch(UnauthorizedAccessException){}}
+                foreach(string temp in temps)TryDelete(temp);
+                throw;
+            }
+            foreach(var p in placed)if(p[1]!=null)TryDelete(p[1]);
+            return parts.Select((part,i)=>new PdfFile{Requested=part.Item2,Path=placed[i][0]}).ToList();
         }
+        // A short temporary name: «имя.pdf.tmp» would be longer than the name itself.
+        static string TempIn(string folder){return System.IO.Path.Combine(folder,"~pdf-"+Guid.NewGuid().ToString("N").Substring(0,12)+".tmp");}
         // Windows allows 255 characters in a name and 259 in a path; the indexed name «имя (99).pdf» must fit too.
         // Other systems report a long name when the file is saved.
         static void CheckName(string path) {
@@ -87,19 +102,21 @@ namespace ReviewMerge {
             bool windows=System.IO.Path.DirectorySeparatorChar=='\\';
             if(full==null||name.Length+5>255||windows&&full.Length+5>259)throw new IOException("имя PDF «"+name+"» слишком длинное или недопустимое: задайте имя короче.");
         }
+        // Moves the written temporary file to its name; the file it replaces is moved aside (returned second) and restored if the move fails.
         // A file open in another program cannot be replaced: the PDF goes to the first free «имя (1).pdf», «имя (2).pdf»…
-        static string Save(byte[] data,string path) {
+        static string[] Place(string temp,string path) {
             string folder=System.IO.Path.GetDirectoryName(path),stem=System.IO.Path.GetFileNameWithoutExtension(path);
             for(int i=0;i<100;i++) {
-                // A short temporary name: «имя.pdf.tmp» would be longer than the name itself.
-                string candidate=i==0?path:System.IO.Path.Combine(folder,stem+" ("+i+").pdf"),temp=System.IO.Path.Combine(folder,"~pdf-"+Guid.NewGuid().ToString("N").Substring(0,12)+".tmp");
-                try {File.WriteAllBytes(temp,data);}
-                catch(UnauthorizedAccessException){throw new IOException("нет доступа к папке «"+folder+"».");}
-                catch(PathTooLongException){throw new IOException("путь к папке PDF слишком длинный: «"+folder+"».");}
-                try {if(File.Exists(candidate))File.Delete(candidate);File.Move(temp,candidate);return candidate;}
-                catch(PathTooLongException){TryDelete(temp);throw new IOException("имя PDF «"+System.IO.Path.GetFileName(candidate)+"» слишком длинное: задайте имя короче.");}
-                catch(IOException){TryDelete(temp);}
-                catch(UnauthorizedAccessException){TryDelete(temp);}
+                string candidate=i==0?path:System.IO.Path.Combine(folder,stem+" ("+i+").pdf"),aside=null;
+                try {
+                    if(File.Exists(candidate)){aside=TempIn(folder);File.Move(candidate,aside);}
+                    try{File.Move(temp,candidate);}
+                    catch{if(aside!=null)try{File.Move(aside,candidate);}catch(IOException){}catch(UnauthorizedAccessException){}throw;}
+                    return new[]{candidate,aside};
+                }
+                catch(PathTooLongException){throw new IOException("имя PDF «"+System.IO.Path.GetFileName(candidate)+"» слишком длинное: задайте имя короче.");}
+                catch(IOException){}
+                catch(UnauthorizedAccessException){}
             }
             throw new IOException("«"+System.IO.Path.GetFileName(path)+"» и файлы с индексами до 99 открыты или недоступны.");
         }

@@ -338,9 +338,9 @@ namespace ReviewMerge {
                     // «Элементы» reads «Результат проверки акта»: its value when the cell has one, otherwise what the formula of the form gives
                     // (not checked without a reviewer or a date, remarks while a mark 1 is not resolved; TRIM keeps no-break spaces).
                     object result = acts.Status > 0 ? v[acts.Status - 1] : null, fx = fixedCol > 0 ? v[fixedCol - 1] : null;
-                    string fixedText = fx is bool ? "1" : Convert.ToString(fx, Inv).Trim(' ').ToUpperInvariant();
+                    // A mark «1» typed as text counts, as COUNTIF counts it; «0,0», 0, «нет» or empty in «Замечания устранены» leave the remarks open.
                     string status = result is string && (string)result != "" && blanks.Count == 0 ? (string)result : Blank(v[who - 1]) || Blank(v[date - 1]) ? "не проверен" :
-                        flags.Any(c => v[c - 1] is double && (double)v[c - 1] == 1) && (fixedText == "" || fixedText == "0" || fixedText == "НЕТ") ? "замечания" : "соответствует";
+                        flags.Any(c => Rules.IsRemarkMark(v[c - 1])) && !Rules.IsResolved(fx) ? "замечания" : "соответствует";
                     if (status == "соответствует") acts.Conform++; else if (status == "замечания") acts.Remarks++;
                     string key = element;
                     if (!acts.ElementStatus.ContainsKey(key)) acts.ElementStatus[key] = status;

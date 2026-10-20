@@ -22,7 +22,10 @@ namespace ReviewMerge {
             string k = section + "|" + key; int id; if (rdParts.TryGetValue(k, out id)) return id;
             var list = styles.Root.Element(N + section);
             if (list == null) { list = new XElement(N + section); (styles.Root.Element(N + "cellStyles") ?? styles.Root.Element(N + "cellXfs")).AddAfterSelf(list); }
-            id = list.Elements().Count(); list.Add(make()); list.SetAttributeValue("count", id + 1); rdParts[k] = id; return id;
+            // An equal part of an earlier build is reused: the conditional formats of every build would otherwise add their dxfs again.
+            var part = make(); id = list.Elements().TakeWhile(e => !XNode.DeepEquals(e, part)).Count();
+            if (id == list.Elements().Count()) { list.Add(part); list.SetAttributeValue("count", id + 1); }
+            rdParts[k] = id; return id;
         }
         int RdNumberFormat(string code) {
             switch (code) { case null: case "General": return 0; case "0": return 1; case "0%": return 9; case "h:mm": return 20; case "@": return 49; }
@@ -202,6 +205,18 @@ namespace ReviewMerge {
             // A repeated row keeps its cells; only «Изм.» typed as text becomes a number, as for the sets.
             foreach (var set in rd.Duplicates) Revision(rowAt(set.SheetRow), set.SheetRow, put);
             var byRow = rd.Sets.Concat(rd.Duplicates).ToDictionary(s => s.SheetRow);
+            // Codes without spaces to normalise and editions that are numbers are compared as they are: normalising the whole column
+            // in every row makes Excel recalculate a long form many times slower.
+            plainCodes = true;
+            for (int r = layout.First; r <= rd.Last && plainCodes; r++) {
+                XElement row; if (!rows.TryGetValue(r, out row)) continue;
+                var cells = row.Elements(N + "c").Where(e => { int col = Column((string)e.Attribute("r")); return col == layout["rd"] || col == layout["rev"]; });
+                foreach (var cell in cells) {
+                    object value = Value(cell); bool code = Column((string)cell.Attribute("r")) == layout["rd"];
+                    if (value == null || value as string == "") continue;
+                    if (code ? !(value is string) || RdEngine.ExcelKey(value) != (string)value : !(value is double)) plainCodes = false;
+                }
+            }
             for (int r = layout.First; r <= rd.Last; r++) {
                 if (r % 200 == 0) token.ThrowIfCancellationRequested();
                 RdSet set; byRow.TryGetValue(r, out set); var row = rowAt(r); var f = RdFormulas(r);
@@ -275,6 +290,7 @@ namespace ReviewMerge {
             var next = main.Root.Elements().FirstOrDefault(e => after.Contains(e.Name.LocalName));
             if (next != null) next.AddBeforeSelf(rule); else main.Root.Add(rule);
         }
+        bool plainCodes;
         // The formulas of the grey columns of the form (the same as in the form the program was made for).
         Dictionary<string, string> RdFormulas(int r) {
             var l = rd.Layout;
@@ -288,9 +304,14 @@ namespace ReviewMerge {
             string unresolved = Rules.ResolvedFormula(c("fixed")) + "=0", el = Rules.ExcelText(c("el"));
             // «Действующая редакция»: no row of the code has a greater «Изм.», and no row above repeats the code with the same «Изм.» (empty is 0).
             Func<string, string> rev = cell => "TRIM(" + cell + "&\"\")";
+            // MATCH stops at the first row of the element and compares text as text; ~, * and ? are escaped, as MATCH reads them as wildcards.
+            string keys = "$" + l.L("elkey") + "$" + l.First + ":" + c("elkey"), wild = "SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(" + c("elkey") + ",\"~\",\"~~\"),\"*\",\"~*\"),\"?\",\"~?\")";
+            string first = "IFERROR(MATCH(" + wild + "," + keys + ",0)=ROWS(" + keys + "),SUMPRODUCT(--(" + keys + "=" + c("elkey") + "))=1)";
             string upTo = "$" + l.First + ":$", codes = "$" + l.L("rd") + upTo + l.L("rd") + (r - 1), revs = "$" + l.L("rev") + upTo + l.L("rev") + (r - 1);
-            string greater = "SUMPRODUCT((" + Rules.ExcelText(range("rd")) + "=" + code + ")*ISNUMBER(" + range("rev") + ")*(" + range("rev") + ">N(" + c("rev") + ")))";
-            string repeated = r == l.First ? "" : "+SUMPRODUCT((" + Rules.ExcelText(codes) + "=" + code + ")*(((" + rev(revs) + "=" + rev(c("rev")) + ")+((" + rev(revs) + "=\"\")+(" + rev(revs) + "=\"0\"))*((" + rev(c("rev")) + "=\"\")+(" + rev(c("rev")) + "=\"0\")))>0))";
+            string greater = "SUMPRODUCT((" + (plainCodes ? range("rd") : Rules.ExcelText(range("rd"))) + "=" + code + ")*ISNUMBER(" + range("rev") + ")*(" + range("rev") + ">N(" + c("rev") + ")))";
+            // With numbers only an empty «Изм.» equals 0 by itself.
+            string repeated = r == l.First ? "" : plainCodes ? "+SUMPRODUCT((" + codes + "=" + code + ")*(" + revs + "=N(" + c("rev") + ")))"
+                : "+SUMPRODUCT((" + Rules.ExcelText(codes) + "=" + code + ")*(((" + rev(revs) + "=" + rev(c("rev")) + ")+((" + rev(revs) + "=\"\")+(" + rev(revs) + "=\"0\"))*((" + rev(c("rev")) + "=\"\")+(" + rev(c("rev")) + "=\"0\")))>0))";
             return new Dictionary<string, string> {
                 { "ve", empty + "IF(ISNA(" + found + "),\"нет в ВЭ РД\",IF(INDEX(" + v + "$AF:$AF," + found + ")<>" + c("elkey") + ",\"элемент \"&INDEX(" + v + "$AF:$AF," + found + "),\"да\")))" },
                 { "te", empty + "IFERROR(INDEX(" + v + "$I:$I," + found + "),\"—\"))" },
@@ -301,7 +322,7 @@ namespace ReviewMerge {
                 { "latest", empty + "IF(" + greater + repeated + "=0,1,0))" },
                 // The numbers start at 1 in the first data row: the row of column numbers above may hold a number in this column.
                 // Elements are compared as text: COUNTIF would read «7.10» as the number 7.1.
-                { "order", "IF(" + c("elkey") + "=\"\",\"\",IF(SUMPRODUCT(--($" + l.L("elkey") + "$" + l.First + ":" + c("elkey") + "=" + c("elkey") + "))=1," + (r == l.First ? "1" : "MAX($" + l.L("order") + "$" + l.First + ":$" + l.L("order") + (r - 1) + ")+1") + ",\"\"))" },
+                { "order", "IF(" + c("elkey") + "=\"\",\"\",IF(" + first + "," + (r == l.First ? "1" : "MAX($" + l.L("order") + "$" + l.First + ":$" + l.L("order") + (r - 1) + ")+1") + ",\"\"))" },
                 { "elkey", "IF(" + el + "<>\"\"," + el + ",IF(" + code + "=\"\",\"\"," + above + "))" },
                 // 1 within the last 7 working days before «Дата завершения проверки» (and after it), 2 before them; a number that is no date gives none.
                 { "priority", l["deadline"] == 0 ? "\"\"" : empty + "IF(AND(ISNUMBER(" + c("deadline") + ")," + c("deadline") + ">=36526," + c("deadline") + "<109575),IFERROR(IF(TODAY()>=WORKDAY(" + c("deadline") + ",-7),1,2),\"\"),\"\"))" } };

@@ -371,6 +371,13 @@ ast = av['Статистика']; acts_lines = {ast.cell(r, 1).value: ast.cell(r
 assert (acts_lines['Проверено актов'], acts_lines['Из них с замечаниями']) == (2, 1), acts_lines
 assert 'MATCH(1,INDEX(--(' + xt("'Проверка актов'!$B$7:$B$100") + '=$A6),0),0)' in load_workbook(acted)['Элементы'].cell(6, 13).value
 
+# A mark «1» typed as text and «0,0» in «Замечания устранены» leave the remarks of the act open, as Excel counts them.
+marked = form(B / 'Акты текстом.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('Т1', '1.2', who='Борис', date=D(6)), row('Д1', '1.3', who='Вера', date=D(7))],
+              acts=[{2: '1.1', 6: 'Анна', 7: D(8), 8: '1'}, {2: '1.2', 6: 'Борис', 7: D(8), 9: 1, 11: '0,0'}, {2: '1.3', 6: 'Вера', 7: D(8), 8: ' 1', 11: 'нет'}])
+assert 'error' not in build(marked)
+mv = load_workbook(marked, data_only=True)
+assert [mv['Элементы'].cell(r, 13).value for r in (6, 7, 8)] == ['замечания'] * 3, [mv['Элементы'].cell(r, 13).value for r in (6, 7, 8)]
+
 # A copy without the element columns whose row of column numbers a sort moved under the data: the row is skipped, not merged as set «2».
 no_element = [h for h in HEADS if h not in ('Номер элемента', 'Наименование элемента')]
 plain = numbers_at_end(form(B / 'Копия без элементов.xlsx', [row('Т1', who='Борис', date=D(6))], heads=no_element), code=no_element.index('Шифр РД') + 1)

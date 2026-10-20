@@ -170,6 +170,12 @@ long = B / 'long' / 'long.xlsx'; long.parent.mkdir(); long.write_bytes(output.re
 subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(long), '2026-10-04', MAIN, str(long), '--pdf-name-work=' + 'Итоги' * 52], check=True, timeout=120)
 report = json.loads(Path(str(long) + '.run.json').read_text(encoding='utf-8-sig'))
 assert report['Pdfs'] == [] and 'слишком длинное' in report['PdfError'] and not list(long.parent.glob('*.pdf')) and not list(long.parent.glob('*.tmp')), report
+# When the second PDF cannot be saved, the first one replaced by this run is restored: the earlier «СВОД» PDF is not lost.
+keep = B / 'keep' / 'keep.xlsx'; keep.parent.mkdir(); keep.write_bytes(output.read_bytes())
+code, text = run('--pdf', keep, '2026-10-04'); kept = keep.parent / 'keep СВОД 2026.10.04.pdf'; before = kept.read_bytes()
+for n in range(100): (keep.parent / ('Работа.pdf' if n == 0 else 'Работа (%d).pdf' % n)).mkdir()
+code, text = run('--pdf', keep, '2026-10-04', '--pdf-name-work=Работа')
+assert code == 1 and 'открыты или недоступны' in text and kept.read_bytes() == before and not list(keep.parent.glob('*.tmp')), text
 # Characters missing from the font are «�» in the text layer, not copies of the first missing character.
 stress = B / 'stress' / 'stress.xlsx'; stress.parent.mkdir(); w = load_workbook(output); w['СВОД']['A1'] = '李小龍 Ёжик'; w.save(stress)
 code, text = run('--pdf', stress, '2026-10-04')

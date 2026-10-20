@@ -10,12 +10,17 @@ namespace ReviewMerge {
         void CompactStyles() {
             var root = styles.Root;
             var fonts = Dedupe(root.Element(N + "fonts")); var fills = Dedupe(root.Element(N + "fills")); var borders = Dedupe(root.Element(N + "borders"));
-            // Number formats are the same when their codes are: the first id of a code is kept.
+            // Number formats are the same when their codes are: the first id of a code is kept. Pivot tables and slicers refer to them
+            // by number too: the formats they name are kept as they are.
+            var pivotParts = entries.Keys.Where(k => (k.StartsWith("xl/pivot") || k.StartsWith("xl/slicer") || k.StartsWith("xl/timeline")) && k.EndsWith(".xml")).ToList();
+            bool pivots = pivotParts.Count > 0;
+            var named = new HashSet<string>(pivotParts.SelectMany(k => Xml(k).Root.DescendantsAndSelf().Select(e => (string)e.Attribute("numFmtId")).Where(v => v != null)));
             var numbers = new Dictionary<int, int>(); var formats = root.Element(N + "numFmts");
             if (formats != null) {
                 var first = new Dictionary<string, int>();
                 foreach (var f in formats.Elements(N + "numFmt").ToList()) {
                     int id; string code = (string)f.Attribute("formatCode") ?? ""; if (!int.TryParse((string)f.Attribute("numFmtId"), out id)) continue;
+                    if (named.Contains(id.ToString(CultureInfo.InvariantCulture))) continue;
                     int kept; if (first.TryGetValue(code, out kept)) { numbers[id] = kept; f.Remove(); } else first[code] = id;
                 }
                 formats.SetAttributeValue("count", formats.Elements().Count());
@@ -27,7 +32,7 @@ namespace ReviewMerge {
             var cells = Dedupe(root.Element(N + "cellXfs"));
             // Table styles, tables, pivot tables and slicers refer to differential formats by number too; such books keep their dxfs as they are.
             var tables = root.Element(N + "tableStyles");
-            bool dxfUsers = tables != null && tables.Elements().Any() || entries.Keys.Any(k => k.StartsWith("xl/tables/") || k.StartsWith("xl/pivot") || k.StartsWith("xl/slicer") || k.StartsWith("xl/timeline"));
+            bool dxfUsers = pivots || tables != null && tables.Elements().Any() || entries.Keys.Any(k => k.StartsWith("xl/tables/"));
             var dxfs = dxfUsers ? null : Dedupe(root.Element(N + "dxfs"));
             bool cellsMoved = cells != null && cells.Any(p => p.Key != p.Value), dxfsMoved = dxfs != null && dxfs.Any(p => p.Key != p.Value);
             if (!cellsMoved && !dxfsMoved) return;
