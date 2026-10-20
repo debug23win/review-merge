@@ -127,6 +127,8 @@ namespace ReviewMerge {
         public int First = 7, Last = 100, El, Who, Date, Status, Conform, Remarks;
         public readonly Dictionary<string, string> ElementStatus = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public readonly List<Tuple<string, double>> Checks = new List<Tuple<string, double>>();
+        // Cells (row, column) of a reviewer, a date or «Замечания устранены» holding only spaces: the build clears them.
+        public readonly List<int[]> Blanks = new List<int[]>();
     }
     // Everything the RD build writes: the sets in sheet order, the stage list, the acts, the elements and the calendar.
     public sealed class RdBook {
@@ -141,6 +143,8 @@ namespace ReviewMerge {
         // The last row of the main sheet that gets formulas, and the last row of the formula ranges before the build.
         public int Last, OldLast, ElementsLast;
         public readonly List<RdSet> Sets = new List<RdSet>();
+        // Rows of the consolidated book repeating a set above (merged into it): their formulas are cached, they are not a current edition.
+        public readonly List<RdSet> Duplicates = new List<RdSet>();
         public RdVed Ved;
         public RdActs Acts;
         public readonly List<RdElement> Elements = new List<RdElement>();
@@ -160,6 +164,23 @@ namespace ReviewMerge {
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         const int Width = 80;
         static string Txt(object v) { return XlsxReader.Text(v); }
+        // The text of Rules.ExcelText: no-break, narrow and figure spaces, tabs and line breaks become spaces, then Excel TRIM (spaces only).
+        internal static string ExcelKey(object value) {
+            if (value == null) return "";
+            string s = value is string ? (string)value : value is bool ? ((bool)value ? "TRUE" : "FALSE") : Convert.ToString(value, Inv);
+            foreach (char ch in new[] { '\u00a0', '\t', '\n', '\r', '\u202f', '\u2007' }) s = s.Replace(ch, ' ');
+            return Regex.Replace(s.Trim(' '), " {2,}", " ");
+        }
+        // An empty cell as a formula sees it (="" is false for spaces).
+        internal static bool Blank(object v) { return v == null || v is string && (string)v == ""; }
+        // A file that is not a zip package gives a .NET message in English: the file is named instead.
+        static RawSheet Read(string path, string name, string what) {
+            try { return XlsxReader.ReadSheet(path, name, Width); }
+            catch (InvalidDataException ex) {
+                if (Regex.IsMatch(ex.Message, @"\p{IsCyrillic}")) throw;
+                throw new InvalidDataException(what + Path.GetFileName(path) + "» повреждён или не является книгой Excel .xlsx. Сводный документ не изменён.", ex);
+            }
+        }
         static void Check(CancellationToken token) { token.ThrowIfCancellationRequested(); }
         static void AddProblem(MergeResult r, RdRow row, string detail) { r.Problems.Add(new Problem { File = row.File, Row = row.Row, Document = Txt(row["rd"]), Detail = detail }); }
         static IEnumerable<string> ReviewKeys(RdLayout layout) { return RdLayout.Review.Concat(layout.Flags); }
@@ -187,7 +208,7 @@ namespace ReviewMerge {
             return d.HasValue ? DateTime.FromOADate(d.Value).ToString("dd.MM.yyyy", Inv) : Txt(value) == "" ? "(пусто)" : Txt(value);
         }
         static RawSheet Sheet(string path, string name, bool required) {
-            var sheet = XlsxReader.ReadSheet(path, name, Width);
+            var sheet = Read(path, name, "Файл «");
             if (sheet == null && required) throw new InvalidDataException(Path.GetFileName(path) + ": нет листа «" + name + "».");
             return sheet;
         }
@@ -214,9 +235,9 @@ namespace ReviewMerge {
                 if (!sheet.Rows.TryGetValue(r, out values)) values = new object[Width]; else values = (object[])values.Clone();
                 var row = new RdRow { File = sheet.Path, Row = r, Values = values, Layout = layout };
                 if (sheet.Date1904) foreach (string k in new[] { "date", "fixed", "deadline" }) { int c = layout[k]; if (c > 0 && values[c - 1] is double && (double)values[c - 1] > 1000) values[c - 1] = (double)values[c - 1] + 1462; }
-                string el = Txt(row["el"]), rd = Txt(row["rd"]);
-                // The row of column numbers moved among the data (e.g. by a sort in Excel) is not a set.
-                if (new[] { "el", "rd", "who" }.All(k => Txt(row[k]) == layout[k].ToString(Inv))) { numbers.Add(r); continue; }
+                string el = ExcelKey(row["el"]), rd = ExcelKey(row["rd"]);
+                // The row of column numbers moved among the data (e.g. by a sort in Excel) is not a set; a copy may have no element columns.
+                if (new[] { "el", "rd", "who" }.Where(k => layout[k] > 0).All(k => Txt(row[k]) == layout[k].ToString(Inv))) { numbers.Add(r); continue; }
                 elkey = el != "" ? el : rd == "" ? "" : elkey; row.ElKey = elkey;
                 elname = el != "" ? Txt(row["elname"]) : rd == "" ? "" : elname; row.ElName = elname;
                 if (rd != "") rows.Add(row); else if (HasReview(row) && orphans != null) orphans.Add(row);
@@ -240,7 +261,7 @@ namespace ReviewMerge {
             if (basePath != null) ImportBase(ved, header, basePath, result);
             string above = "";
             for (int r = ved.First; r <= ved.Last; r++) {
-                string el = Txt(sheet.At(r, 1)), code = Txt(sheet.At(r, 4));
+                string el = ExcelKey(sheet.At(r, 1)), code = ExcelKey(sheet.At(r, 4));
                 above = el != "" ? el : code == "" ? "" : above; ved.Element[r] = above;
                 if (code != "") { ved.Sets++; if (!ved.CodeRow.ContainsKey(code)) ved.CodeRow[code] = r; }
                 if (above != "") {
@@ -257,7 +278,7 @@ namespace ReviewMerge {
             string name = Path.GetFileName(basePath);
             if (!File.Exists(basePath)) throw new InvalidDataException("Не найден файл базы элементов: " + basePath);
             if (string.Equals(Path.GetFullPath(basePath), Path.GetFullPath(ved.Sheet.Path), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Файл базы элементов — это сама сводная книга. Укажите файл этапа с листом «База».");
-            var source = XlsxReader.ReadSheet(basePath, "База", Width) ?? XlsxReader.ReadSheet(basePath, "Ведомость", Width);
+            var source = Read(basePath, "База", "Файл базы элементов «") ?? Read(basePath, "Ведомость", "Файл базы элементов «");
             if (source == null) throw new InvalidDataException(name + ": нет листа «База».");
             int baseHeader = VedHeader(source);
             if (baseHeader == 0) throw new InvalidDataException(name + ": на листе «База» нет шапки ведомости элементов РД («Номер элемента» в A, «Шифр РД» в D).");
@@ -309,12 +330,19 @@ namespace ReviewMerge {
                 acts.Last = Math.Max(100, sheet.Rows.Keys.DefaultIfEmpty(0).Max());
                 for (int r = acts.First; r <= acts.Last; r++) {
                     object[] v; if (!sheet.Rows.TryGetValue(r, out v)) continue;
-                    string element = Txt(v[el - 1]); if (element == "") continue;
+                    string element = ExcelKey(v[el - 1]); if (element == "") continue;
+                    // Spaces, a no-break space or a tab alone are no reviewer, date or mark of resolution, as on the check sheet: the cell is cleared.
+                    var blanks = new[] { who, date, fixedCol }.Where(c => c > 0 && !Blank(v[c - 1]) && Rules.CleanName(v[c - 1]) == "").ToList();
+                    foreach (int c in blanks) { acts.Blanks.Add(new[] { r, c }); v[c - 1] = null; }
                     string whoText = Rules.CleanName(v[who - 1]); double? day = XlsxReader.DateSerial(v[date - 1]);
-                    // The result as the formula of the sheet gives it: not checked without a reviewer or a date, remarks while a mark is not resolved.
-                    string status = whoText == "" || Txt(v[date - 1]) == "" ? "не проверен" : flags.Any(c => Flag(v[c - 1]) is double && (double)Flag(v[c - 1]) == 1) && !(fixedCol > 0 && Rules.IsResolved(v[fixedCol - 1])) ? "замечания" : "соответствует";
+                    // «Элементы» reads «Результат проверки акта»: its value when the cell has one, otherwise what the formula of the form gives
+                    // (not checked without a reviewer or a date, remarks while a mark 1 is not resolved; TRIM keeps no-break spaces).
+                    object result = acts.Status > 0 ? v[acts.Status - 1] : null, fx = fixedCol > 0 ? v[fixedCol - 1] : null;
+                    string fixedText = fx is bool ? "1" : Convert.ToString(fx, Inv).Trim(' ').ToUpperInvariant();
+                    string status = result is string && (string)result != "" && blanks.Count == 0 ? (string)result : Blank(v[who - 1]) || Blank(v[date - 1]) ? "не проверен" :
+                        flags.Any(c => v[c - 1] is double && (double)v[c - 1] == 1) && (fixedText == "" || fixedText == "0" || fixedText == "НЕТ") ? "замечания" : "соответствует";
                     if (status == "соответствует") acts.Conform++; else if (status == "замечания") acts.Remarks++;
-                    string key = XlsxReader.Text(v[el - 1]);
+                    string key = element;
                     if (!acts.ElementStatus.ContainsKey(key)) acts.ElementStatus[key] = status;
                     if (whoText != "" && day.HasValue) acts.Checks.Add(Tuple.Create(whoText, day.Value));
                 }
@@ -344,13 +372,19 @@ namespace ReviewMerge {
                 foreach (var row in rows) {
                     Check(token);
                     string key = Key(row);
-                    if (!seen.Add(key)) AddProblem(result, row, "Повтор комплекта с тем же шифром РД и «Изм.»: данные объединены с первой строкой.");
+                    if (!seen.Add(key)) {
+                        AddProblem(result, row, "Повтор комплекта с тем же шифром РД и «Изм.»: данные объединены с первой строкой" + (fi == 0 ? "; повтор не считается действующей редакцией и в отчёты не входит." : "."));
+                        // The repeated row stays in the consolidated book as it is: its formulas are cached from its own cells.
+                        if (fi == 0) { var copy = new RdSet { Key = key, SheetRow = row.Row, TargetRow = row }; foreach (string k in RdLayout.Identity.Concat(RdLayout.Review).Concat(layout.Flags)) copy[k] = sheet.At(row.Row, layout[k]); book.Duplicates.Add(copy); }
+                    }
                     // One spelling of a reviewer: the first met (the consolidated book first) for every way of writing the same name.
                     string who = Rules.CleanName(row["who"]);
                     if (who != "" && !RdBook.IsExpert(who)) {
                         string known, nameKey = Rules.NameKey(who);
-                        if (!spelling.TryGetValue(nameKey, out known)) spelling[nameKey] = who;
-                        else if (known != who) { row.Values[layout["who"] - 1] = known; string merge = "«" + who + "» → «" + known + "»"; if (!result.PeopleMerges.Contains(merge)) result.PeopleMerges.Add(merge); }
+                        if (!spelling.TryGetValue(nameKey, out known)) spelling[nameKey] = known = who;
+                        else if (known != who) { string merge = "«" + who + "» → «" + known + "»"; if (!result.PeopleMerges.Contains(merge)) result.PeopleMerges.Add(merge); }
+                        // The one spelling replaces outer and doubled spaces too: the report formulas compare the names as typed.
+                        if (!(row["who"] is string && (string)row["who"] == known)) row.Values[layout["who"] - 1] = known;
                     }
                     else if (RdBook.IsExpert(who)) row.Values[layout["who"] - 1] = RdBook.Expert;
                     RdSet set;
@@ -410,7 +444,7 @@ namespace ReviewMerge {
             // A check of the Technical expert is dated by the letter of ТЭ («Дата» of the expert in «Ведомость», column K) when its row has no date.
             bool expert = RdBook.IsExpert(set["who"]);
             if (expert && !XlsxReader.DateSerial(set["date"]).HasValue) {
-                int vr; double? letter = ved.CodeRow.TryGetValue(Txt(set["rd"]), out vr) ? XlsxReader.DateSerial(ved.At(vr, 11)) : null;
+                int vr; double? letter = ved.CodeRow.TryGetValue(ExcelKey(set["rd"]), out vr) ? XlsxReader.DateSerial(ved.At(vr, 11)) : null;
                 if (letter.HasValue) { set["date"] = letter.Value; result.ExpertDates++; }
                 else AddProblem(result, reviews[reviews.Count - 1], "Проверил ТЭ, но в «Ведомости» нет даты письма ТЭ (столбец K): дата проверки не заполнена.");
             }
@@ -439,7 +473,11 @@ namespace ReviewMerge {
                 var values = active.Select(r => k == "date" ? Pretty(k, r[k]) : XlsxReader.Normal(layout.Flags.Contains(k) ? Flag(r[k]) : r[k])).Distinct().ToList();
                 if (values.Count < 2) continue;
                 if (kept != null && active.Contains(kept) && active.Where(r => r != kept).All(r => Contained(k, r[k], kept[k], layout))) continue;
-                string decision = (k == "who" || k == "date") && kept != null && Txt(kept["who"]) != "" ? "Проверяющий и дата сводного документа сохранены: из присланных файлов обновляются отметки и замечания." :
+                // An empty date of the consolidated book filled from a file of the same reviewer is no conflict when the files agree on it.
+                bool filled = k == "date" && kept != null && Txt(kept["who"]) != "" && Txt(kept["date"]) == "" && Txt(set["date"]) != "";
+                if (filled && active.Where(r => r != kept).All(r => Txt(r["date"]) == "" || Pretty(k, r[k]) == Pretty(k, set["date"]))) continue;
+                string decision = filled ? "Проверяющий сводного документа сохранён; пустая дата заполнена из последней датированной проверки того же проверяющего." :
+                    (k == "who" || k == "date") && kept != null && Txt(kept["who"]) != "" ? "Проверяющий и дата сводного документа сохранены: из присланных файлов обновляются отметки и замечания." :
                     k == "who" || k == "date" ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                     k == "smr" ? "Значение сводного документа или последней датированной проверки; требуется сверка." :
                     layout.Flags.Contains(k) ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные исходные тексты объединены без добавления фамилий и дат.";
@@ -476,7 +514,7 @@ namespace ReviewMerge {
         static string ElementAbove(RdBook book, int row) {
             string elkey = ""; var layout = book.Layout;
             for (int r = layout.First; r < row; r++) {
-                string el = Txt(book.Target.At(r, layout["el"])), rd = Txt(book.Target.At(r, layout["rd"]));
+                string el = ExcelKey(book.Target.At(r, layout["el"])), rd = ExcelKey(book.Target.At(r, layout["rd"]));
                 elkey = el != "" ? el : rd == "" ? "" : elkey;
             }
             return elkey;
@@ -490,32 +528,37 @@ namespace ReviewMerge {
             int bottom = Math.Max(book.Last, book.Target.Rows.Keys.DefaultIfEmpty(0).Max());
             for (int r = layout.First; r <= bottom; r++) {
                 RdSet set; bySheetRow.TryGetValue(r, out set);
-                string el = Txt(set != null ? (set.IsNew ? set["el"] : book.Target.At(r, layout["el"])) : book.Target.At(r, layout["el"]));
-                string rd = set != null ? Txt(set["rd"]) : Txt(book.Target.At(r, layout["rd"]));
+                string el = ExcelKey(set != null ? (set.IsNew ? set["el"] : book.Target.At(r, layout["el"])) : book.Target.At(r, layout["el"]));
+                string rd = set != null ? ExcelKey(set["rd"]) : ExcelKey(book.Target.At(r, layout["rd"]));
                 elkey = el != "" ? el : rd == "" ? "" : elkey;
                 if (elkey != "" && !orders.ContainsKey(elkey)) { orders[elkey] = ++order; book.RowOrder[r] = order; }
                 book.RowElKey[r] = elkey;
                 if (set != null) { set.ElKey = elkey; set.Order = elkey == "" ? 0 : orders[elkey]; }
                 rowKeys.Add(new KeyValuePair<int, string>(r, elkey));
             }
-            foreach (var set in book.Sets) {
-                string code = Txt(set["rd"]); int vr;
+            foreach (var set in book.Duplicates) { string key; book.RowElKey.TryGetValue(set.SheetRow, out key); set.ElKey = key ?? ""; }
+            // Repeated rows keep their cells: the reviewer and the marks are read as the formulas read them, and they are never current.
+            foreach (var item in book.Sets.Select(s => Tuple.Create(s, false)).Concat(book.Duplicates.Select(s => Tuple.Create(s, true)))) {
+                var set = item.Item1; bool copy = item.Item2;
+                string code = ExcelKey(set["rd"]); int vr;
                 if (!ved.CodeRow.TryGetValue(code, out vr)) { set.Ve = "нет в ВЭ РД"; set.Te = "—"; set.TeDate = ""; set.TeLetter = ""; }
                 else {
-                    string element = ved.Element[vr];
+                    string element = ved.Element[vr]; object letter = ved.At(vr, 12);
                     set.Ve = string.Equals(element, set.ElKey, StringComparison.OrdinalIgnoreCase) ? "да" : "элемент " + element;
-                    set.Te = ved.At(vr, 9) ?? (object)0.0; set.TeDate = Txt(ved.At(vr, 11)) == "" ? (object)"" : ved.At(vr, 11); set.TeLetter = Txt(ved.At(vr, 12));
+                    set.Te = ved.At(vr, 9) ?? (object)0.0; set.TeDate = Blank(ved.At(vr, 11)) ? (object)"" : ved.At(vr, 11); set.TeLetter = letter is string ? (string)letter : Txt(letter);
                 }
-                set.Cnt = layout.Flags.Count(f => { object v = Flag(set[f]); return v is double && (double)v == 1; }) + (book.NotesCount && Txt(set["note"]) != "" ? 1 : 0);
+                // As COUNTIF(marks,1): the merge writes every mark it reads as 1 as the number 1.
+                set.Cnt = layout.Flags.Count(f => set[f] is double && (double)set[f] == 1) + (book.NotesCount && ExcelKey(set["note"]) != "" ? 1 : 0);
                 set.Date = XlsxReader.DateSerial(set["date"]);
-                // As the formula: a number in «Дата завершения проверки» (a date), WORKDAY(date,-7) against TODAY().
-                object deadline = layout["deadline"] > 0 ? set["deadline"] : null; double? due = deadline is double ? (double?)Math.Floor((double)deadline) : null;
+                // As the formula: a date in «Дата завершения проверки», WORKDAY(date,-7) against TODAY(); another number gives no priority.
+                object deadline = layout["deadline"] > 0 ? set["deadline"] : null; double? due = deadline is double ? XlsxReader.DateSerial(deadline) : null;
                 set.Priority = due.HasValue ? (int?)(book.Today >= Workday(due.Value, -7) ? 1 : 2) : null;
-                set.Status = set.Ve != "да" ? "не соответствует ВЭ РД" : set.Who == "" ? "не проверен" : set.Cnt > 0 && !Rules.IsResolved(set["fixed"]) ? "замечания" :
-                    !RdBook.Agreed.Any(a => string.Equals(Txt(set.Te), a, StringComparison.OrdinalIgnoreCase)) ? "не согласован ТЭ" : "готово к ВПР";
+                bool nobody = copy ? ExcelKey(set["who"]) == "" : set.Who == "";
+                set.Status = set.Ve != "да" ? "не соответствует ВЭ РД" : nobody ? "не проверен" : set.Cnt > 0 && !Rules.IsResolved(set["fixed"]) ? "замечания" :
+                    !RdBook.Agreed.Any(a => string.Equals(ExcelKey(set.Te), a, StringComparison.OrdinalIgnoreCase)) ? "не согласован ТЭ" : "готово к ВПР";
             }
             // The current edition: no set with the same code has a greater «Изм.» (numbers only, as COUNTIFS with ">"&N()).
-            foreach (var g in book.Sets.GroupBy(s => Txt(s["rd"]), StringComparer.OrdinalIgnoreCase)) {
+            foreach (var g in book.Sets.GroupBy(s => ExcelKey(s["rd"]), StringComparer.OrdinalIgnoreCase)) {
                 var list = g.ToList();
                 foreach (var s in list) { object rev = Revision(s["rev"]); double n = rev is double ? (double)rev : 0; s.Latest = !list.Any(o => { object x = Revision(o["rev"]); return x is double && (double)x > n; }); }
             }
