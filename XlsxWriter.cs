@@ -24,6 +24,13 @@ namespace ReviewMerge {
         int bodyStyle,headStyle,dateStyle,dateHeadStyle,intStyle,percentStyle,titleStyle,noteStyle;
         readonly Dictionary<int,int> mainDateStyles=new Dictionary<int,int>();
         readonly Dictionary<int,int> mainTextStyles=new Dictionary<int,int>();
+        readonly Dictionary<int,int> mainNumberStyles=new Dictionary<int,int>();
+        int MainNumberStyle(int original) {
+            int id;if(mainNumberStyles.TryGetValue(original,out id))return id;
+            var xfs=styles.Root.Element(N+"cellXfs");var xf=new XElement(xfs.Elements().ElementAt(original));
+            xf.SetAttributeValue("numFmtId",1);xf.SetAttributeValue("applyNumberFormat",1);
+            id=xfs.Elements().Count();xfs.Add(xf);xfs.SetAttributeValue("count",id+1);mainNumberStyles[original]=id;return id;
+        }
         RegisterColumns mainColumns;
         // Column of «Замечания устранены» on the main sheet.
         int resolvedColumn;
@@ -156,7 +163,7 @@ namespace ReviewMerge {
             foreach(var r in result.Rows){
                 int checked_=Text(r.Values[8])!=""?1:0;double? date=checked_==1?XlsxReader.DateSerial(r.Values[9]):null;
                 // «Примечание» (T) is a remark only when the option says so.
-                int issue=r.Values.Skip(12).Take(6).Any(v=>Text(v)!="" && Text(v)!="0") || Text(r.Values[18])!="" || options.NotesCount && Text(r.Values[19])!=""?1:0;
+                int issue=r.Values.Skip(12).Take(6).Any(Rules.IsRemarkMark) || Text(r.Values[18])!="" || options.NotesCount && Text(r.Values[19])!=""?1:0;
                 boxKeys.Add(Rules.BoxKeys(r.Values[10],r.Values[11]));dates.Add(date);issues.Add(issue);checkedFlags.Add(checked_);
             }
             for(int i=0;i<result.Rows.Count;i++){
@@ -195,9 +202,12 @@ namespace ReviewMerge {
             if(resolvedColumn>0) {
                 // «Замечания устранены»: 1 stays a number, a date gets the date format; an unchanged cell keeps its formatting.
                 var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==resolvedColumn);object value=row.Resolved;
-                if(!(keep&&source!=null&&Text(source.Resolved)==Text(value))&&!(value==null&&old==null)) {
+                int oldStyle=old!=null?(int?)old.Attribute("s")??0:0;
+                bool numericMark=(value is double||value is int||value is long)&&!XlsxReader.DateSerial(value).HasValue;
+                bool repairNumberFormat=numericMark&&old!=null&&(int?)styles.Root.Element(N+"cellXfs").Elements().ElementAt(oldStyle).Attribute("numFmtId")!=1;
+                if(repairNumberFormat||!(keep&&source!=null&&Text(source.Resolved)==Text(value))&&!(value==null&&old==null)) {
                     int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(resolvedColumn)?sourceStyles[resolvedColumn]:bodyStyle;double? serial=XlsxReader.DateSerial(value);
-                    if(serial.HasValue){value=serial.Value;style=MainDateStyle(style);}else{double n;if(value is string&&double.TryParse((string)value,NumberStyles.Float,Inv,out n))value=n;}
+                    if(serial.HasValue){value=serial.Value;style=MainDateStyle(style);}else{double n;if(value is string&&double.TryParse(((string)value).Replace(',','.'),NumberStyles.Float,Inv,out n))value=n;if(value is double||value is int||value is long)style=MainNumberStyle(style);}
                     SetCell(xmlrow,Cell(rn,resolvedColumn,value,style));
                 }
             }
@@ -219,7 +229,8 @@ namespace ReviewMerge {
             foreach(var c in head.Elements(N+"c")){int col=Column((string)c.Attribute("r"));if(col>notes&&Rules.IsResolvedHeader(Value(c)))return col;}
             if(options.KeepLegacyColumns)return 0;
             int column=notes+1;
-            foreach(var row in rows.Where(r=>r.Key<first).Select(r=>r.Value))foreach(var c in row.Elements(N+"c"))if(Text(Value(c))!="")column=Math.Max(column,Column((string)c.Attribute("r"))+1);
+            foreach(var row in rows.Values)foreach(var c in row.Elements(N+"c"))if(Text(Value(c))!=""||c.Element(N+"f")!=null)column=Math.Max(column,Column((string)c.Attribute("r"))+1);
+            if(column>16384)throw new InvalidDataException("Недостаточно столбцов Excel для добавления «Замечания устранены». Сводный документ не изменён.");
             SetCell(head,Cell(header,column,Rules.ResolvedHeader,StyleAt(main,header,notes,headStyle)));
             XElement numbers=null,hint=null,found;
             if(first==header+2&&rows.TryGetValue(header+1,out found)&&Text(Value(At(main,header+1,1)))=="1"){numbers=found;SetCell(numbers,Cell(header+1,column,column,StyleAt(main,header+1,notes,bodyStyle)));}

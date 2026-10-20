@@ -251,7 +251,7 @@ namespace ReviewMerge {
             }
             return ved;
         }
-        static string Letters(object header) { return Regex.Replace(XlsxReader.Normal(header).Replace('Ё', 'Е'), @"[^\p{L}\p{N}]", ""); }
+        static string Letters(object header) { return Regex.Replace(XlsxReader.Normal(header).Replace('Ё', 'Е'), @"[^\p{L}\p{N}№]", ""); }
         // «База» of the stage list file replaces the data of «Ведомость» (columns A–AE) row for row; the header of «Ведомость» stays.
         static void ImportBase(RdVed ved, int header, string basePath, MergeResult result) {
             string name = Path.GetFileName(basePath);

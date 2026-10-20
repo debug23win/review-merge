@@ -141,7 +141,7 @@ assert all(types.cell(r, head).value in (0, None, '') for r in range(6, types.ma
 reference = load_workbook(comment)['Справка по томам']
 heads = {reference.cell(6, c).value: c for c in range(1, reference.max_column + 1) if reference.cell(6, c).value}
 issue = reference.cell(7, heads['Есть замечания']).value
-assert "'Все загруженные файлы'!T7<>\"\"" in issue and "!U7" not in issue, issue
+assert "'Все загруженные файлы'!T7" in issue and "!U7" not in issue and 'CHAR(160)' in issue, issue
 
 # The row of column numbers moved among the data by a sort has 22 in «Замечания устранены»: it is neither a volume with remarks nor resolved.
 moved = book(B / 'numbers.xlsx', documents[:2]); build(moved)

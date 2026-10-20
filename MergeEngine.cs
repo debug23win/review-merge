@@ -201,7 +201,7 @@ namespace ReviewMerge {
                 MergedRow r = pair.Key, source = pair.Value; if (Checked(r)) continue;
                 double date = XlsxReader.DateSerial(source.Values[9]).Value;
                 if (Txt(r.Values[8]) == "") r.Values[8] = source.Values[8];
-                if (!XlsxReader.DateSerial(r.Values[9]).HasValue) r.Values[9] = date;
+                if (Txt(r.Values[9]) == "") r.Values[9] = date;
                 if (Txt(r.Values[10]) == "") r.Values[10] = source.Values[10];
                 if (Txt(r.Values[11]) == "") r.Values[11] = source.Values[11];
                 result.FilledRows++;
@@ -344,7 +344,7 @@ namespace ReviewMerge {
                     double? d = XlsxReader.DateSerial(row.Values[9]);
                     if (d.HasValue && DateTime.FromOADate(d.Value) < min) min = DateTime.FromOADate(d.Value);
                 }
-                if (row.Values.Skip(12).Take(6).Any(v => Txt(v) != "" && Txt(v) != "0") || Txt(row.Values[18]) != "" || options.NotesCount && Txt(row.Values[19]) != "") result.WithIssues++;
+                if (row.Values.Skip(12).Take(6).Any(Rules.IsRemarkMark) || Txt(row.Values[18]) != "" || options.NotesCount && Txt(row.Values[19]) != "") result.WithIssues++;
             }
             if ((asOf.Date-min.Date).TotalDays > 730) throw new InvalidDataException("Период проверки больше двух лет. Проверьте даты в столбце J.");
             for (var d=min.Date;d<=asOf.Date;d=d.AddDays(1)) result.Dates.Add(d);

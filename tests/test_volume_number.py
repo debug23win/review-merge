@@ -60,13 +60,16 @@ def test_mixed_columns_and_text():
     assert all(m.cell(7, c).value == 1 for c in range(14, 20))
     assert 'Замечание из старой описи' in m['T7'].value
     assert '=Текст без вычисления' in m['U7'].value and m['U7'].data_type != 'f'
-    assert m['V7'].value == 'Пользовательский столбец' and m.auto_filter.ref.startswith('A5:V')
+    assert m['V7'].value == 'Пользовательский столбец' and m.auto_filter.ref.startswith('A5:W')
+    assert m['W5'].value == 'Замечания устранены'
     appended = next(r for r in range(7, m.max_row + 1) if m.cell(r, 3).value == 'Новый документ')
     assert m.cell(appended, 19).value == 1 and m.cell(appended, 21).value == 'Новый текст'
     assert m.cell(appended, 13).number_format == '@'
     assert m['J7'].number_format.lower() == 'dd.mm.yyyy'
     h = next(c.column for c in ref[1] if c.value == 'ReviewMerge.FirstDates.v3')
-    assert f"'{MAIN}'!N7:S7" in ref.cell(7, h + 5).value
+    from openpyxl.utils import get_column_letter
+    normalized = f'{get_column_letter(h+31)}7:{get_column_letter(h+36)}7'
+    assert normalized in ref.cell(7, h + 5).value and '"?*"' not in ref.cell(7, h + 5).value
     assert f"'{MAIN}'!T7" in ref.cell(7, h + 23).value
     assert f"'{MAIN}'!U7" in ref.cell(7, h + 24).value
     assert all(f"'{MAIN}'!{chr(78 + n)}7" in ref.cell(7, h + 31 + n).value for n in range(6))
