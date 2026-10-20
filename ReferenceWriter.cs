@@ -51,7 +51,8 @@ namespace ReviewMerge {
             var exact=persons.FirstOrDefault(p=>Rules.NameKey(p.Name)==Rules.NameKey(raw));
             if(!options.MatchSurnames) {
                 if(exact!=null)return exact;
-                var bySurname=persons.Where(p=>string.Equals(Rules.Surname(p.Name),raw,StringComparison.OrdinalIgnoreCase)).ToList();
+                // Only full names count: a short spelling ("АА Яковлева") added by an earlier build is not a second candidate.
+                var bySurname=persons.Where(p=>Rules.Fullness(p.Name)>0&&string.Equals(Rules.Surname(p.Name),raw,StringComparison.OrdinalIgnoreCase)).ToList();
                 return bySurname.Count==1?bySurname[0]:null;
             }
             string surname=Rules.SurnameKey(raw);if(surname=="")return exact;
