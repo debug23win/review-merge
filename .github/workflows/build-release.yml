@@ -22,7 +22,7 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          $version = '2.1.0'
+          $version = '2.1.1'
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
           ./build.ps1 -Version $version
       - name: Test merging and update validation
@@ -46,6 +46,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PD recheck tests failed' }
           python tests/test_dpi.py
           if ($LASTEXITCODE -ne 0) { throw 'Window DPI tests failed' }
+          python tests/test_ui.py
+          if ($LASTEXITCODE -ne 0) { throw 'Window layout tests failed' }
           python tests/test_history.py
           if ($LASTEXITCODE -ne 0) { throw 'History tests failed' }
           python tests/test_rd.py

@@ -129,7 +129,9 @@ def test_formatted_summary_is_preserved():
     s['H6'].font = Font(name='Times New Roman', color='FF0000', bold=True)
     s['B6'].fill = PatternFill('solid', fgColor='AABBCC'); s.column_dimensions['B'].width = 38
     s.row_dimensions.group(7, 8, hidden=True); s.print_area = ['A1:V6', 'A8:V9']
-    saved_style = copy(s['H6']._style); saved_merges = list(map(str, s.merged_cells.ranges)); saved_print = str(s.print_area)
+    # The look of the cell, not its style number: identical styles are merged on every build.
+    look = lambda c: (repr(c.font), repr(c.fill), repr(c.border), c.number_format, repr(c.alignment), repr(c.protection))
+    saved_style = look(s['H6']); saved_merges = list(map(str, s.merged_cells.ranges)); saved_print = str(s.print_area)
     literal = s['C9'].value; w.save(target)
     source = make(TEMP / 'formatted-source.xlsx', False)
     w = load_workbook(source); m = w[MAIN]
@@ -138,7 +140,7 @@ def test_formatted_summary_is_preserved():
     w.save(source); run(target, source, legacy=True)
     w = load_workbook(target); s = w['СВОД']; ref = w['Справка по томам']
     assert s['A1'].value == 'Оформленный пользователем свод'
-    assert s['H6']._style == saved_style and list(map(str, s.merged_cells.ranges)) == saved_merges
+    assert look(s['H6']) == saved_style and list(map(str, s.merged_cells.ranges)) == saved_merges
     assert str(s.print_area).upper() == saved_print.upper() and s.column_dimensions['B'].width == 38
     assert s.row_dimensions[7].hidden and s['B6'].fill.fgColor.rgb == '00AABBCC'
     assert s['C9'].value == literal, 'References inside quoted text must not change'

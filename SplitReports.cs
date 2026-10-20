@@ -17,7 +17,7 @@ namespace ReviewMerge {
             foreach(var c in cells){var f=c.Element(N+"f");if(f==null||(string)f.Attribute("t")!="shared")continue;Tuple<string,string> anchor;
                 if(!anchors.TryGetValue((string)f.Attribute("si"),out anchor))throw new System.IO.InvalidDataException("Не найден исходный текст общей формулы Excel: "+(string)c.Attribute("r"));
                 string target=(string)c.Attribute("r");int dc=Column(target)-Column(anchor.Item1),dr=int.Parse(Regex.Match(target,@"\d+$").Value,Inv)-int.Parse(Regex.Match(anchor.Item1,@"\d+$").Value,Inv);
-                f.Value=Regex.Replace(anchor.Item2,@"""(?:[^""]|"""")*""|(?<![\p{L}\p{N}_])(?<ca>\$?)(?<c>[A-Z]{1,3})(?<ra>\$?)(?<r>\d+)",m=>{
+                f.Value=Regex.Replace(anchor.Item2,@"""(?:[^""]|"""")*""|(?<![\p{L}\p{N}_])(?<ca>\$?)(?<c>[A-Z]{1,3})(?<ra>\$?)(?<r>\d+)(?![\p{L}\p{N}_.]|\s*\()",m=>{
                     if(!m.Groups["c"].Success)return m.Value;int col=Column(m.Groups["c"].Value)+(m.Groups["ca"].Value==""?dc:0),row=int.Parse(m.Groups["r"].Value,Inv)+(m.Groups["ra"].Value==""?dr:0);
                     return col<1||row<1?"#REF!":m.Groups["ca"].Value+MergeEngine.ExcelColumn(col)+m.Groups["ra"].Value+row;
                 });f.RemoveAttributes();

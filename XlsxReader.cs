@@ -103,14 +103,32 @@ namespace ReviewMerge {
             return string.Join("\u001f", new [] { filename, extension, crc,
                 date.HasValue ? date.Value.ToString(Inv) : Normal(row.Values[5]), TimeKey(row.Values[6]) });
         }
+        // The key without CRC32: a record whose CRC32 is missing finds the only document with the same name, format, upload date and time.
+        public static string LooseKey(SourceRow row) {
+            var parts = Key(row).Split('\u001f'); parts[2] = ""; return string.Join("\u001f", parts);
+        }
+        // A damaged, encrypted or missing file gives a Russian message with its name instead of the .NET text.
+        sealed class DamagedBookException : Exception { public readonly string Part; public DamagedBookException(string part, Exception inner) : base(inner.Message, inner) { Part = part; } }
+        static ZipArchive OpenBook(Stream stream) {
+            try { return new ZipArchive(stream, ZipArchiveMode.Read); } catch (InvalidDataException ex) { throw new DamagedBookException(null, ex); }
+        }
+        static T ReadBook<T>(string path, Func<T> read) {
+            try { return read(); }
+            catch (DamagedBookException ex) { throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": не удалось прочитать книгу .xlsx" + (ex.Part != null ? " (раздел " + ex.Part + ")" : "") + " — файл повреждён или защищён паролем. Откройте его в Excel и сохраните как «Книга Excel (.xlsx)» без пароля.", ex.InnerException); }
+            catch (FileNotFoundException ex) { throw new FileNotFoundException("Файл не найден: " + path, path, ex); }
+            catch (DirectoryNotFoundException ex) { throw new FileNotFoundException("Файл не найден: " + path, path, ex); }
+        }
         static XDocument Load(ZipArchive z, string entryName) {
             var entry = z.GetEntry(entryName);
             if (entry == null) throw new InvalidDataException("В Excel отсутствует раздел " + entryName);
             if (entry.Length > 150000000) throw new InvalidDataException("Раздел Excel слишком большой: " + entryName);
-            using (var stream = entry.Open())
-            using (var reader = XmlReader.Create(stream, new XmlReaderSettings {
-                DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 150000000 }))
-                return XDocument.Load(reader);
+            try {
+                using (var stream = entry.Open())
+                using (var reader = XmlReader.Create(stream, new XmlReaderSettings {
+                    DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 150000000 }))
+                    return XDocument.Load(reader);
+            } catch (XmlException ex) { throw new DamagedBookException(entryName, ex); }
+            catch (InvalidDataException ex) { throw new DamagedBookException(entryName, ex); }
         }
         static object RawValue(XElement cell,IList<string> strings) {
             if(cell==null)return null;
@@ -152,8 +170,11 @@ namespace ReviewMerge {
         public static RawSheet ReadSheet(string path, string sheetName, int width) {
             if (!string.Equals(System.IO.Path.GetExtension(path), ".xlsx", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Поддерживаются файлы .xlsx: " + System.IO.Path.GetFileName(path));
+            return ReadBook(path, () => ReadSheetData(path, sheetName, width));
+        }
+        static RawSheet ReadSheetData(string path, string sheetName, int width) {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
+            using (var zip = OpenBook(stream)) {
                 List<string> strings; bool date1904;
                 var data = SheetXml(zip, sheetName, out strings, out date1904);
                 if (data == null) return null;
@@ -178,9 +199,12 @@ namespace ReviewMerge {
         public static SourceBook Read(string path, string sheetName) {
             if (!string.Equals(System.IO.Path.GetExtension(path), ".xlsx", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Поддерживаются файлы .xlsx: " + System.IO.Path.GetFileName(path));
+            return ReadBook(path, () => ReadData(path, sheetName));
+        }
+        static SourceBook ReadData(string path, string sheetName) {
             var result = new SourceBook { Path = path };
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read)) {
+            using (var zip = OpenBook(stream)) {
                 List<string> strings; bool date1904;
                 var data = SheetXml(zip, sheetName, out strings, out date1904);
                 if (data == null) throw new InvalidDataException(System.IO.Path.GetFileName(path) + ": нет листа «" + sheetName + "».");

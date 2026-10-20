@@ -147,7 +147,9 @@ namespace ReviewMerge {
             if(mainColumns.HasVolumeNumber&&volumeHeader!="НОМЕРТОМА"&&volumeHeader!="№ТОМА")InsertVolumeColumn(main,actualName,result.HeaderRow,result.StartRow);
             int first=result.StartRow;var data=main.Root.Element(N+"sheetData");
             var existing=data.Elements(N+"row").ToDictionary(e=>(int)e.Attribute("r"));
-            int next=Math.Max(first-1,existing.Keys.DefaultIfEmpty(first-1).Max())+1;
+            // New documents follow the last row that holds a value or a formula; rows below it that only carry formatting are reused.
+            Func<XElement,bool> holds=e=>e.Elements(N+"c").Any(c=>c.Element(N+"f")!=null||!string.IsNullOrEmpty(Convert.ToString(Value(c),Inv)));
+            int next=Math.Max(first-1,existing.Where(p=>holds(p.Value)).Select(p=>p.Key).DefaultIfEmpty(first-1).Max())+1;
             var rowNumbers=result.Rows.Select(r=>r.TargetRow!=null?r.TargetRow.Row:next++).ToList();
             int last=Math.Max(existing.Keys.DefaultIfEmpty(first).Max(),rowNumbers.DefaultIfEmpty(first).Max());
             if(last>1048576)throw new InvalidDataException("В сводном документе недостаточно свободных строк Excel для новых документов.");
@@ -169,7 +171,7 @@ namespace ReviewMerge {
             for(int i=0;i<result.Rows.Count;i++){
                 token.ThrowIfCancellationRequested();int rn=rowNumbers[i];var row=result.Rows[i];XElement xmlrow;
                 bool keep=existing.TryGetValue(rn,out xmlrow);if(!keep){xmlrow=new XElement(N+"row",new XAttribute("r",rn));existing[rn]=xmlrow;data.Add(xmlrow);}
-                WriteMainRow(xmlrow,rn,keep,row,row.TargetRow,sourceStyles);
+                WriteMainRow(xmlrow,rn,keep&&row.TargetRow!=null,row,row.TargetRow,sourceStyles);
                 // A document repeated in the consolidated book gets the same review data in every repeated row.
                 foreach(var copy in row.TargetDuplicates){XElement other;if(existing.TryGetValue(copy.Row,out other))WriteMainRow(other,copy.Row,true,row,copy,sourceStyles);}
             }
@@ -215,7 +217,7 @@ namespace ReviewMerge {
                 var old=xmlrow.Elements(N+"c").FirstOrDefault(e=>Column((string)e.Attribute("r"))==13);
                 int style=MainTextStyle(old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(13)?sourceStyles[13]:bodyStyle);
                 if(old!=null&&old.Element(N+"f")!=null&&source!=null&&Text(source.VolumeNumber)==Text(row.VolumeNumber))old.SetAttributeValue("s",style);
-                else SetCell(xmlrow,Cell(rn,13,row.VolumeNumber,style));
+                else SetCell(xmlrow,Cell(rn,13,Text(row.VolumeNumber)==""?null:row.VolumeNumber,style));
             }
             /* Calculation cells belong on the reference sheet, outside the main register. */
             var sorted=xmlrow.Elements(N+"c").OrderBy(e=>Column((string)e.Attribute("r"))).ToList();sorted.Remove();xmlrow.Add(sorted);
@@ -255,7 +257,11 @@ namespace ReviewMerge {
         }
         void Finish(string output,MergeResult result,DateTime asOf,Action<int,string> progress,CancellationToken token) {
             // Excel recalculates on open; a stored forced full calculation would recalculate the whole book after every edit.
-            var calc=book.Root.Element(N+"calcPr");if(calc==null){calc=new XElement(N+"calcPr");book.Root.Add(calc);}calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",null);calc.SetAttributeValue("calcId",0);
+            var calc=book.Root.Element(N+"calcPr");
+            if(calc==null){
+                calc=new XElement(N+"calcPr");string[] after={"oleSize","customWorkbookViews","pivotCaches","smartTagPr","smartTagTypes","webPublishing","fileRecoveryPr","webPublishObjects","extLst"};
+                var before=book.Root.Elements().FirstOrDefault(e=>e.Name.Namespace==N&&after.Contains(e.Name.LocalName));if(before!=null)before.AddBeforeSelf(calc);else book.Root.Add(calc);
+            }calc.SetAttributeValue("calcMode","auto");calc.SetAttributeValue("fullCalcOnLoad",1);calc.SetAttributeValue("forceFullCalc",null);calc.SetAttributeValue("calcId",0);
             rels.Root.Elements().Where(e=>((string)e.Attribute("Type")??"").EndsWith("/calcChain")).Remove();types.Root.Elements().Where(e=>((string)e.Attribute("PartName")??"").EndsWith("/calcChain.xml")).Remove();entries.Remove("xl/calcChain.xml");
             int svIndex=book.Root.Element(N+"sheets").Elements().Select((e,i)=>new {e,i}).First(x=>string.Equals((string)x.e.Attribute("name"),"Свод",StringComparison.OrdinalIgnoreCase)).i;
             var view=book.Root.Element(N+"bookViews");if(view==null){view=new XElement(N+"bookViews");book.Root.Element(N+"sheets").AddBeforeSelf(view);}if(!view.Elements().Any())view.Add(new XElement(N+"workbookView"));foreach(var workbookView in view.Elements())workbookView.SetAttributeValue("activeTab",svIndex);
@@ -268,7 +274,7 @@ namespace ReviewMerge {
                 }
                 if(changed)Store(path,doc);
             }
-            Store("xl/workbook.xml",book);Store("xl/_rels/workbook.xml.rels",rels);Store("[Content_Types].xml",types);Store("xl/styles.xml",styles);
+            Store("xl/workbook.xml",book);Store("xl/_rels/workbook.xml.rels",rels);Store("[Content_Types].xml",types);CompactStyles();Store("xl/styles.xml",styles);
             progress(90,"Сохранение XLSX с формулами");using(var s=new FileStream(output,FileMode.CreateNew))using(var z=new ZipArchive(s,ZipArchiveMode.Create)){foreach(var item in entries){token.ThrowIfCancellationRequested();var e=z.CreateEntry(item.Key,CompressionLevel.Optimal);using(var stream=e.Open())stream.Write(item.Value,0,item.Value.Length);}}
             result.Boxes=referenceLayout.Completed.Count(e=>e.Value.HasValue&&e.Value.Value<=asOf.Date.ToOADate());
         }

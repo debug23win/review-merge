@@ -22,7 +22,10 @@ namespace ReviewMerge {
             string k = section + "|" + key; int id; if (rdParts.TryGetValue(k, out id)) return id;
             var list = styles.Root.Element(N + section);
             if (list == null) { list = new XElement(N + section); (styles.Root.Element(N + "cellStyles") ?? styles.Root.Element(N + "cellXfs")).AddAfterSelf(list); }
-            id = list.Elements().Count(); list.Add(make()); list.SetAttributeValue("count", id + 1); rdParts[k] = id; return id;
+            // An equal part of an earlier build is reused: the conditional formats of every build would otherwise add their dxfs again.
+            var part = make(); id = list.Elements().TakeWhile(e => !XNode.DeepEquals(e, part)).Count();
+            if (id == list.Elements().Count()) { list.Add(part); list.SetAttributeValue("count", id + 1); }
+            rdParts[k] = id; return id;
         }
         int RdNumberFormat(string code) {
             switch (code) { case null: case "General": return 0; case "0": return 1; case "0%": return 9; case "h:mm": return 20; case "@": return 49; }
@@ -141,7 +144,7 @@ namespace ReviewMerge {
             var pr = book.Root.Element(N + "workbookPr"); if (pr != null && ((string)pr.Attribute("date1904") == "1" || (string)pr.Attribute("date1904") == "true")) throw new InvalidDataException("Сводный документ использует систему дат 1904. Нужна книга с системой дат 1900.");
             SetupStyles();
             WriteRdMain(token); progress(60, "Комплекты объединены, формулы листа «" + rd.MainName + "» до строки " + rd.Last);
-            WriteVedHelpers(token);
+            WriteVedHelpers(token); ClearActs();
             rd.ElementsLast = 5 + Math.Max(60, rd.Elements.Count + 20);
             WriteRdElements(); WriteRdStatistics(); WriteRdSummary(asOf); WriteRdTotals(asOf);
             GrowMainReferences();
@@ -177,15 +180,19 @@ namespace ReviewMerge {
                 bool notes = false;
                 foreach (string k in keys) {
                     int col = layout[k]; if (col == 0) continue;
-                    object value = set[k], before = rd.Target.At(rn, col); bool date = false;
-                    if (k == "rev" && value is string) { double n; if (double.TryParse(((string)value).Replace(',', '.'), NumberStyles.Float, Inv, out n)) value = n; }
+                    object value = set[k], before = rd.Target.At(rn, col); bool date = false, flag = layout.Flags.Contains(k);
+                    if (k == "rev") value = RevisionNumber(value);
+                    if (k == "who" && Rules.CleanName(value) == "") value = null;
+                    if (flag && value is string) { double n; if (double.TryParse(Text(value).Replace(',', '.'), NumberStyles.Float, Inv, out n) && (n == 0 || n == 1)) value = n; }
                     if (k == "date" || k == "fixed" || k == "deadline") {
                         double? d = XlsxReader.DateSerial(value);
                         if (d.HasValue) { value = d.Value; date = true; }
                         else if (value is string) { double n; if (double.TryParse((string)value, NumberStyles.Float, Inv, out n)) value = n; }
                     }
-                    if (!set.IsNew && Text(before) == Text(value) && (!date || before is double)) continue;
-                    if (Text(value) == "" && Text(before) == "") continue;
+                    // Spaces, a no-break space or a tab alone are cleared: a formula would read the cell as filled.
+                    if (Text(value) == "") { if (RdEngine.Blank(before)) continue; }
+                    // The reviewer, the marks and «Изм.» are compared as typed: COUNTIF and COUNTIFS read a mark or an edition written as text differently.
+                    else if (!set.IsNew && Text(before) == Text(value) && (!date || before is double) && (!(k == "who" || k == "rev" || flag) || SameCell(before, value))) continue;
                     if ((k == "text" || k == "note") && Text(value).Contains("\n")) notes = true;
                     put(row, rn, col, Text(value) == "" ? null : value, null, date);
                 }
@@ -193,8 +200,23 @@ namespace ReviewMerge {
                 // A deadline typed as text in the consolidated book is written as a date.
                 int due = layout["deadline"];
                 if (!set.IsNew && due > 0 && rd.Target.At(rn, due) is string && set["deadline"] is double) put(row, rn, due, set["deadline"], null, true);
+                if (!set.IsNew) Revision(row, rn, put);
             }
-            var byRow = rd.Sets.ToDictionary(s => s.SheetRow);
+            // A repeated row keeps its cells; only «Изм.» typed as text becomes a number, as for the sets.
+            foreach (var set in rd.Duplicates) Revision(rowAt(set.SheetRow), set.SheetRow, put);
+            var byRow = rd.Sets.Concat(rd.Duplicates).ToDictionary(s => s.SheetRow);
+            // Codes without spaces to normalise and editions that are numbers are compared as they are: normalising the whole column
+            // in every row makes Excel recalculate a long form many times slower.
+            plainCodes = true;
+            for (int r = layout.First; r <= rd.Last && plainCodes; r++) {
+                XElement row; if (!rows.TryGetValue(r, out row)) continue;
+                var cells = row.Elements(N + "c").Where(e => { int col = Column((string)e.Attribute("r")); return col == layout["rd"] || col == layout["rev"]; });
+                foreach (var cell in cells) {
+                    object value = Value(cell); bool code = Column((string)cell.Attribute("r")) == layout["rd"];
+                    if (value == null || value as string == "") continue;
+                    if (code ? !(value is string) || RdEngine.ExcelKey(value) != (string)value : !(value is double)) plainCodes = false;
+                }
+            }
             for (int r = layout.First; r <= rd.Last; r++) {
                 if (r % 200 == 0) token.ThrowIfCancellationRequested();
                 RdSet set; byRow.TryGetValue(r, out set); var row = rowAt(r); var f = RdFormulas(r);
@@ -224,6 +246,19 @@ namespace ReviewMerge {
             int maxCol = data.Elements(N + "row").Elements(N + "c").Select(e => Column((string)e.Attribute("r"))).DefaultIfEmpty(1).Max(), maxRow = rows.Keys.DefaultIfEmpty(1).Max();
             var dimension = main.Root.Element(N + "dimension"); if (dimension != null) dimension.SetAttributeValue("ref", "A1:" + MergeEngine.ExcelColumn(maxCol) + maxRow);
             Store(mainPath, main);
+        }
+        // «Изм.» typed as text in the consolidated book is written as the number «Действующая редакция» compares.
+        void Revision(XElement row, int rn, Action<XElement, int, int, object, string, bool> put) {
+            int col = rd.Layout["rev"]; object before = rd.Target.At(rn, col), value = RevisionNumber(before);
+            if (col > 0 && before is string && (value == null || value is double)) put(row, rn, col, value, null, false);
+        }
+        static object RevisionNumber(object value) {
+            if (!(value is string)) return value;
+            double n; return Text(value) == "" ? null : double.TryParse(Text(value).Replace(',', '.'), NumberStyles.Float, Inv, out n) ? (object)n : value;
+        }
+        static bool SameCell(object before, object value) {
+            if (before is string && value is string) return (string)before == (string)value;
+            return before != null && value != null && before.GetType() == value.GetType() && Text(before) == Text(value);
         }
         // The red hints over the header of the form: «Примечание» and «Видов замечаний» follow the option; the deadline and the priority get theirs when empty.
         static readonly string[][] NoteHints = { new[] { "тоже замечание: не готово к ВПР", "комментарий, не замечание" }, new[] { "флажки и примечание", "флажки" } };
@@ -255,29 +290,49 @@ namespace ReviewMerge {
             var next = main.Root.Elements().FirstOrDefault(e => after.Contains(e.Name.LocalName));
             if (next != null) next.AddBeforeSelf(rule); else main.Root.Add(rule);
         }
+        bool plainCodes;
         // The formulas of the grey columns of the form (the same as in the form the program was made for).
         Dictionary<string, string> RdFormulas(int r) {
             var l = rd.Layout;
             Func<string, string> c = k => "$" + l.L(k) + r;
             Func<string, string> range = k => "$" + l.L(k) + "$" + l.First + ":$" + l.L(k) + "$" + rd.Last;
-            string v = Sheet(Ved), code = "TRIM(" + c("rd") + "&\"\")", found = "MATCH(" + code + "," + v + "$AG:$AG,0)", empty = "IF(" + c("rd") + "=\"\",\"\",";
-            string agreed = "OR(" + string.Join(",", RdBook.Agreed.Select(a => c("te") + "=" + Q(a))) + ")";
+            // Codes, elements, notes and reviewers are read through Rules.ExcelText, as the program reads them (RdEngine.ExcelKey).
+            string v = Sheet(Ved), code = Rules.ExcelText(c("rd")), found = "MATCH(" + code + "," + v + "$AG:$AG,0)", empty = "IF(" + code + "=\"\",\"\",";
+            string agreed = "OR(" + string.Join(",", RdBook.Agreed.Select(a => Rules.ExcelText(c("te")) + "=" + Q(a))) + ")";
             string above = r > l.First ? "$" + l.L("elkey") + (r - 1) : "\"\"";
             string flags = "$" + MergeEngine.ExcelColumn(l.Flags.Min(f => l[f])) + r + ":$" + MergeEngine.ExcelColumn(l.Flags.Max(f => l[f])) + r;
-            string fx = "TRIM(" + c("fixed") + "&\"\")", unresolved = "OR(" + fx + "=\"\"," + fx + "=\"0\",UPPER(" + fx + ")=\"НЕТ\")";
+            string unresolved = Rules.ResolvedFormula(c("fixed")) + "=0", el = Rules.ExcelText(c("el"));
+            // «Действующая редакция»: no row of the code has a greater «Изм.», and no row above repeats the code with the same «Изм.» (empty is 0).
+            Func<string, string> rev = cell => "TRIM(" + cell + "&\"\")";
+            // MATCH stops at the first row of the element and compares text as text; ~, * and ? are escaped, as MATCH reads them as wildcards.
+            string keys = "$" + l.L("elkey") + "$" + l.First + ":" + c("elkey"), wild = "SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(" + c("elkey") + ",\"~\",\"~~\"),\"*\",\"~*\"),\"?\",\"~?\")";
+            string first = "IFERROR(MATCH(" + wild + "," + keys + ",0)=ROWS(" + keys + "),SUMPRODUCT(--(" + keys + "=" + c("elkey") + "))=1)";
+            string upTo = "$" + l.First + ":$", codes = "$" + l.L("rd") + upTo + l.L("rd") + (r - 1), revs = "$" + l.L("rev") + upTo + l.L("rev") + (r - 1);
+            string greater = "SUMPRODUCT((" + (plainCodes ? range("rd") : Rules.ExcelText(range("rd"))) + "=" + code + ")*ISNUMBER(" + range("rev") + ")*(" + range("rev") + ">N(" + c("rev") + ")))";
+            // With numbers only an empty «Изм.» equals 0 by itself.
+            string repeated = r == l.First ? "" : plainCodes ? "+SUMPRODUCT((" + codes + "=" + code + ")*(" + revs + "=N(" + c("rev") + ")))"
+                : "+SUMPRODUCT((" + Rules.ExcelText(codes) + "=" + code + ")*(((" + rev(revs) + "=" + rev(c("rev")) + ")+((" + rev(revs) + "=\"\")+(" + rev(revs) + "=\"0\"))*((" + rev(c("rev")) + "=\"\")+(" + rev(c("rev")) + "=\"0\")))>0))";
             return new Dictionary<string, string> {
-                { "ve", empty + "IF(COUNTIF(" + v + "$AG:$AG," + code + ")=0,\"нет в ВЭ РД\",IF(INDEX(" + v + "$AF:$AF," + found + ")<>" + c("elkey") + ",\"элемент \"&INDEX(" + v + "$AF:$AF," + found + "),\"да\")))" },
+                { "ve", empty + "IF(ISNA(" + found + "),\"нет в ВЭ РД\",IF(INDEX(" + v + "$AF:$AF," + found + ")<>" + c("elkey") + ",\"элемент \"&INDEX(" + v + "$AF:$AF," + found + "),\"да\")))" },
                 { "te", empty + "IFERROR(INDEX(" + v + "$I:$I," + found + "),\"—\"))" },
                 { "tedate", empty + "IFERROR(IF(INDEX(" + v + "$K:$K," + found + ")=\"\",\"\",INDEX(" + v + "$K:$K," + found + ")),\"\"))" },
                 { "teletter", empty + "IFERROR(INDEX(" + v + "$L:$L," + found + ")&\"\",\"\"))" },
-                { "cnt", empty + "COUNTIF(" + flags + ",1)" + (rd.NotesCount ? "+IF(TRIM(" + c("note") + "&\"\")<>\"\",1,0)" : "") + ")" },
-                { "status", empty + "IF(" + c("ve") + "<>\"да\",\"не соответствует ВЭ РД\",IF(" + c("who") + "=\"\",\"не проверен\",IF(AND(" + c("cnt") + ">0," + unresolved + "),\"замечания\",IF(NOT(" + agreed + "),\"не согласован ТЭ\",\"готово к ВПР\")))))" },
-                { "latest", empty + "IF(COUNTIFS(" + range("rd") + "," + c("rd") + "," + range("rev") + ",\">\"&N(" + c("rev") + "))=0,1,0))" },
+                { "cnt", empty + "COUNTIF(" + flags + ",1)" + (rd.NotesCount ? "+IF(LEN(" + Rules.ExcelText(c("note")) + ")>0,1,0)" : "") + ")" },
+                { "status", empty + "IF(" + c("ve") + "<>\"да\",\"не соответствует ВЭ РД\",IF(LEN(" + Rules.ExcelText(c("who")) + ")=0,\"не проверен\",IF(AND(" + c("cnt") + ">0," + unresolved + "),\"замечания\",IF(NOT(" + agreed + "),\"не согласован ТЭ\",\"готово к ВПР\")))))" },
+                { "latest", empty + "IF(" + greater + repeated + "=0,1,0))" },
                 // The numbers start at 1 in the first data row: the row of column numbers above may hold a number in this column.
-                { "order", "IF(" + c("elkey") + "=\"\",\"\",IF(COUNTIF($" + l.L("elkey") + "$" + l.First + ":" + c("elkey") + "," + c("elkey") + ")=1," + (r == l.First ? "1" : "MAX($" + l.L("order") + "$" + l.First + ":$" + l.L("order") + (r - 1) + ")+1") + ",\"\"))" },
-                { "elkey", "IF(TRIM(" + c("el") + "&\"\")<>\"\",TRIM(" + c("el") + "&\"\"),IF(" + c("rd") + "=\"\",\"\"," + above + "))" },
-                // 1 within the last 7 working days before «Дата завершения проверки» (and after it), 2 before them.
-                { "priority", l["deadline"] == 0 ? "\"\"" : empty + "IF(ISNUMBER(" + c("deadline") + "),IFERROR(IF(TODAY()>=WORKDAY(" + c("deadline") + ",-7),1,2),\"\"),\"\"))" } };
+                // Elements are compared as text: COUNTIF would read «7.10» as the number 7.1.
+                { "order", "IF(" + c("elkey") + "=\"\",\"\",IF(" + first + "," + (r == l.First ? "1" : "MAX($" + l.L("order") + "$" + l.First + ":$" + l.L("order") + (r - 1) + ")+1") + ",\"\"))" },
+                { "elkey", "IF(" + el + "<>\"\"," + el + ",IF(" + code + "=\"\",\"\"," + above + "))" },
+                // 1 within the last 7 working days before «Дата завершения проверки» (and after it), 2 before them; a number that is no date gives none.
+                { "priority", l["deadline"] == 0 ? "\"\"" : empty + "IF(AND(ISNUMBER(" + c("deadline") + ")," + c("deadline") + ">=36526," + c("deadline") + "<109575),IFERROR(IF(TODAY()>=WORKDAY(" + c("deadline") + ",-7),1,2),\"\"),\"\"))" } };
+        }
+        // «Проверка актов»: the cells of spaces only are cleared, so that the result formula of the form agrees with the program.
+        void ClearActs() {
+            var acts = rd.Acts; string path = acts.Blanks.Count == 0 ? null : PathFor(acts.Name); if (path == null) return;
+            var doc = Xml(path);
+            foreach (var b in acts.Blanks) { var cell = At(doc, b[0], b[1]); if (cell == null || cell.Element(N + "f") != null) continue; cell.Elements().Remove(); cell.SetAttributeValue("t", null); }
+            Store(path, doc);
         }
         // «Ведомость»: the element of every row carried down (AF), the trimmed code (AG) and the first row of an element (AH), 200 rows past the data.
         void WriteVedHelpers(CancellationToken token) {
@@ -299,8 +354,9 @@ namespace ReviewMerge {
                 string element; if (!ved.Element.TryGetValue(r, out element)) element = "";
                 string previous; bool start = element != "" && (r == ved.First || !ved.Element.TryGetValue(r - 1, out previous) || !RdBook.Same(previous, element));
                 string above = r > ved.First ? "$AF" + (r - 1) : "\"\"";
-                SetCell(row, Cell(r, 32, element, style, "IF(TRIM($A" + r + "&\"\")<>\"\",TRIM($A" + r + "&\"\"),IF(TRIM($D" + r + "&\"\")=\"\",\"\"," + above + "))"));
-                SetCell(row, Cell(r, 33, Text(ved.At(r, 4)), style, "TRIM($D" + r + "&\"\")"));
+                string el = Rules.ExcelText("$A" + r), code = Rules.ExcelText("$D" + r);
+                SetCell(row, Cell(r, 32, element, style, "IF(" + el + "<>\"\"," + el + ",IF(" + code + "=\"\",\"\"," + above + "))"));
+                SetCell(row, Cell(r, 33, RdEngine.ExcelKey(ved.At(r, 4)), style, code));
                 SetCell(row, Cell(r, 34, start ? 1.0 : 0.0, style, r == ved.First ? "IF($AF" + r + "<>\"\",1,0)" : "IF(AND($AF" + r + "<>\"\",$AF" + r + "<>$AF" + (r - 1) + "),1,0)"));
                 var sorted = row.Elements(N + "c").OrderBy(e => Column((string)e.Attribute("r"))).ToList(); sorted.Remove(); row.Add(sorted);
             }
@@ -396,29 +452,33 @@ namespace ReviewMerge {
             var acts = rd.Acts; string v = Sheet(Ved);
             for (int r = 6; r <= rd.ElementsLast; r++) {
                 var e = r - 6 < rd.Elements.Count ? rd.Elements[r - 6] : null;
-                string a = "$A" + r, blank = "IF(" + a + "=\"\",\"\",", live = M("elkey") + "," + a + "," + M("latest") + ",1";
+                // Elements are compared as text (COUNTIF would read «7.10» as the number 7.1): SUMPRODUCT over the current sets of the element.
+                string a = "$A" + r, blank = "IF(" + a + "=\"\",\"\",", live = "(" + M("elkey") + "=" + a + ")*(" + M("latest") + "=1)", date = M("date");
+                Func<string, string> count = condition => blank + "SUMPRODUCT(" + live + condition + "))";
                 Func<string, string> look = col => "IF(" + a + "=\"\",\"\",IFERROR(INDEX(" + v + "$" + col + ":$" + col + ",MATCH(" + a + "," + v + "$AF:$AF,0)),\"\"))";
-                string act = acts.Exists && acts.Status > 0 ? blank + "IFERROR(INDEX(" + A(acts.Status) + ",MATCH(" + a + "," + A(acts.El) + ",0)),\"не поступал\"))" : blank + "\"не поступал\")";
+                // The first act of the element, its number read as the program reads it (spaces around it do not count).
+                string act = acts.Exists && acts.Status > 0 ? blank + "IFERROR(INDEX(" + A(acts.Status) + ",MATCH(1,INDEX(--(" + Rules.ExcelText(A(acts.El)) + "=" + a + "),0),0)),\"не поступал\"))" : blank + "\"не поступал\")";
                 var cells = new object[][] {
                     new object[] { e == null ? "" : e.Key, "IFERROR(INDEX(" + M("elkey") + ",MATCH(ROW()-5," + M("order") + ",0)),\"\")" },
                     new object[] { e == null ? "" : e.Name, "IF(" + a + "=\"\",\"\",IFERROR(INDEX(" + v + "$B:$B,MATCH(" + a + "," + v + "$AF:$AF,0)),INDEX(" + M("elname") + ",MATCH(" + a + "," + M("elkey") + ",0))))" },
                     new object[] { e == null ? "" : e.Dgp, look("G") },
-                    new object[] { e == null ? "" : (object)(double)e.InVe, blank + "COUNTIF(" + v + "$AF:$AF," + a + "))" },
-                    new object[] { e == null ? "" : (object)(double)e.Presented, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"да\"))" },
+                    new object[] { e == null ? "" : (object)(double)e.InVe, blank + "SUMPRODUCT(--(" + v + "$AF$" + rd.Ved.First + ":$AF$" + rd.Ved.HelperLast + "=" + a + ")))" },
+                    new object[] { e == null ? "" : (object)(double)e.Presented, count("*(" + M("ve") + "=\"да\")") },
                     new object[] { e == null ? "" : (object)(double)e.Missing, blank + "MAX(0,D" + r + "-E" + r + "))" },
-                    new object[] { e == null ? "" : (object)(double)e.NotInVe, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"<>да\"))" },
-                    new object[] { e == null ? "" : (object)(double)e.Checked, blank + "COUNTIFS(" + live + "," + M("ve") + ",\"да\"," + M("status") + ",\"<>не проверен\"))" },
-                    new object[] { e == null ? "" : (object)(double)e.Remarks, blank + "COUNTIFS(" + live + "," + M("status") + ",\"замечания\"))" },
-                    new object[] { e == null ? "" : (object)(double)e.NotAgreed, blank + "COUNTIFS(" + live + "," + M("status") + ",\"не согласован ТЭ\"))" },
-                    new object[] { e == null ? "" : (object)(double)e.Ready, blank + "COUNTIFS(" + live + "," + M("status") + ",\"готово к ВПР\"))" },
+                    new object[] { e == null ? "" : (object)(double)e.NotInVe, count("*(" + M("ve") + "<>\"да\")") },
+                    new object[] { e == null ? "" : (object)(double)e.Checked, count("*(" + M("ve") + "=\"да\")*(" + M("status") + "<>\"не проверен\")") },
+                    new object[] { e == null ? "" : (object)(double)e.Remarks, count("*(" + M("status") + "=\"замечания\")") },
+                    new object[] { e == null ? "" : (object)(double)e.NotAgreed, count("*(" + M("status") + "=\"не согласован ТЭ\")") },
+                    new object[] { e == null ? "" : (object)(double)e.Ready, count("*(" + M("status") + "=\"готово к ВПР\")") },
                     new object[] { e == null ? "" : e.Status, blank + "IF(AND(F" + r + "=0,G" + r + "=0,K" + r + "=D" + r + "),\"готов к ВПР\",IF(F" + r + ">0,\"неполный комплект\",IF(G" + r + ">0,\"расхождение с ВЭ РД\",IF(I" + r + ">0,\"замечания\",IF(J" + r + ">0,\"не согласован ТЭ\",\"в проверке\"))))))" },
                     new object[] { e == null ? "" : e.Act, act },
                     new object[] { e == null ? "" : e.ActVe, look("N") },
                     new object[] { e == null ? "" : e.Vpr, look("R") },
                     // The day of the last current set when every current set has a reviewer and a date (ТЭ too); who checked that set.
-                    new object[] { e == null || !e.Date.HasValue ? "" : (object)e.Date.Value, blank + "IF(COUNTIFS(" + live + ")=COUNTIFS(" + live + "," + M("date") + ",\">0\"," + M("who") + ",\"<>\"),SUMPRODUCT(MAX((" + M("elkey") + "=" + a + ")*(" + M("latest") + "=1)*" + M("date") + ")),\"\"))" },
+                    // A date the program does not read (text, a number outside 2000–2199) leaves the element open; AGGREGATE skips the text of other rows.
+                    new object[] { e == null || !e.Date.HasValue ? "" : (object)e.Date.Value, blank + "IF(SUMPRODUCT(" + live + ")=SUMPRODUCT(" + live + "*ISNUMBER(" + date + ")*(" + date + ">=36526)*(" + date + "<109575)*(" + M("who") + "<>\"\")),IFERROR(_xlfn.AGGREGATE(14,6," + date + "/(" + live + "),1),0),\"\"))" },
                     new object[] { e == null ? "" : e.Who, "IF(OR(" + a + "=\"\",N(P" + r + ")=0),\"\",IFERROR(LOOKUP(2,1/((" + M("elkey") + "=" + a + ")*(" + M("latest") + "=1)*(" + M("date") + "=P" + r + "))," + M("who") + "),\"\"))" },
-                    new object[] { e == null ? "" : (object)(double)e.Expert, blank + "COUNTIFS(" + live + "," + M("who") + ",\"" + RdBook.Expert + "\"))" } };
+                    new object[] { e == null ? "" : (object)(double)e.Expert, count("*(" + M("who") + "=\"" + RdBook.Expert + "\")") } };
                 for (int i = 0; i < cells.Length; i++) sh.Set(r, i + 1, cells[i][0], i == 1 ? name : i == 15 ? day : formula, (string)cells[i][1]);
             }
             string range = "L6:L" + rd.ElementsLast;
@@ -451,7 +511,7 @@ namespace ReviewMerge {
             block("Комплекты РД", new[] {
                 new object[] { "В ведомости элементов РД (ВЭ РД)", "COUNTIF(" + Sheet(Ved) + "$AG$" + rd.Ved.First + ":$AG$" + rd.Ved.HelperLast + ",\"?*\")", rd.Ved.Sets },
                 new object[] { "Представлено на проверку (действующие редакции из ВЭ РД)", "COUNTIFS(" + live + "," + M("ve") + ",\"да\")", sets.Count(s => s.Ve == "да") },
-                new object[] { "Проверено по состоянию на дату отчёта (как в «СВОД»)", "COUNTIFS(" + live + "," + M("date") + ",\"<=\"&$B$4," + M("who") + ",\"<>\")", sets.Count(s => s.Date.HasValue && s.Date.Value <= report && s.Who != "") },
+                new object[] { "Проверено по состоянию на дату отчёта (как в «СВОД»)", "COUNTIFS(" + live + "," + M("date") + ",\">=36526\"," + M("date") + ",\"<=\"&$B$4," + M("who") + ",\"<>\")", sets.Count(s => s.Date.HasValue && s.Date.Value <= report && s.Who != "") },
                 new object[] { "Готово к ВПР", "COUNTIFS(" + live + "," + M("status") + ",\"готово к ВПР\")", sets.Count(s => s.Status == "готово к ВПР") },
                 new object[] { "С неустранёнными замечаниями", "COUNTIFS(" + live + "," + M("status") + ",\"замечания\")", sets.Count(s => s.Status == "замечания") },
                 new object[] { "Замечания устранены", "COUNTIFS(" + live + "," + M("cnt") + ",\">0\"," + done + ")", sets.Count(s => s.Cnt > 0 && resolved(s)) },
@@ -511,7 +571,7 @@ namespace ReviewMerge {
             sh.Set(3, 21, "← дата сборки, в печать не попадает", Rs(9, color: Red, h: "left", wrap: false));
             double[] heights = { 32, 24, 24, 34, 32, 30, 26 }; for (int i = 0; i < heights.Length; i++) sh.Heights[i + 1] = heights[i];
             // Sets with remarks above the table, as the volumes with remarks above the PD «СВОД».
-            string checkedSets = lat + ",1," + M("cnt") + ",\">0\"," + date + ",\">0\"," + date + ",\"<=\"&$U$2," + team;
+            string checkedSets = lat + ",1," + M("cnt") + ",\">0\"," + date + ",\">=36526\"," + date + ",\"<=\"&$U$2," + team;
             string remarked = "COUNTIFS(" + checkedSets + ")", resolved = "(COUNTIFS(" + checkedSets + "," + M("status") + ",\"готово к ВПР\")+COUNTIFS(" + checkedSets + "," + M("status") + ",\"не согласован ТЭ\"))";
             var withRemarks = latest.Where(s => s.Cnt > 0 && s.Date.HasValue && s.Date.Value <= report && s.Who != "").ToList();
             int remarkedCount = withRemarks.Count, resolvedCount = withRemarks.Count(s => s.Status == "готово к ВПР" || s.Status == "не согласован ТЭ");
@@ -543,7 +603,7 @@ namespace ReviewMerge {
                 counts[16] = rd.Elements.Count(e => e.Date == day); counts[18] = latest.Count(s => s.Date == day && s.Who != "");
                 var formulas = new Dictionary<int, string> {
                     { 4, "COUNTIF(" + E("A") + ",\"?*\")" }, { 6, "COUNTIF(" + lat + ",1)" }, { 8, "COUNTIFS(" + E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + d + ")" },
-                    { 10, "COUNTIFS(" + lat + ",1," + date + ",\">0\"," + date + ",\"<=\"&" + d + "," + team + ")" }, { 12, "D" + top + "-H" + top }, { 14, "F" + top + "-J" + top },
+                    { 10, "COUNTIFS(" + lat + ",1," + date + ",\">=36526\"," + date + ",\"<=\"&" + d + "," + team + ")" }, { 12, "D" + top + "-H" + top }, { 14, "F" + top + "-J" + top },
                     { 16, "COUNTIF(" + E("P") + "," + d + ")" }, { 18, "COUNTIFS(" + lat + ",1," + date + "," + d + "," + team + ")" } };
                 sh.Set(row, 2, day, SummaryStyle(2, "thin", row == last ? "thick" : "thin", true, gray, "dd.mm.yyyy"));
                 sh.Set(row, 3, 17.0 / 24, SummaryStyle(3, "thin", row == last ? "thick" : "thin", true, gray, "h:mm"));
@@ -556,7 +616,7 @@ namespace ReviewMerge {
                         { 8, rd.Elements.Count(e => Is(e.Who, name) && e.Date.HasValue && e.Date.Value > 0 && e.Date.Value <= day) }, { 10, latest.Count(s => Is(s.Who, name) && s.Date.HasValue && s.Date.Value <= day) },
                         { 16, rd.Elements.Count(e => Is(e.Who, name) && e.Date == day) }, { 18, latest.Count(s => Is(s.Who, name) && s.Date == day) } };
                     var mineFormulas = new Dictionary<int, string> {
-                        { 8, "COUNTIFS(" + E("Q") + "," + n + "," + E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + d + ")" }, { 10, "COUNTIFS(" + lat + ",1," + who + "," + n + "," + date + ",\">0\"," + date + ",\"<=\"&" + d + ")" },
+                        { 8, "COUNTIFS(" + E("Q") + "," + n + "," + E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + d + ")" }, { 10, "COUNTIFS(" + lat + ",1," + who + "," + n + "," + date + ",\">=36526\"," + date + ",\"<=\"&" + d + ")" },
                         { 16, "COUNTIFS(" + E("Q") + "," + n + "," + E("P") + "," + d + ")" }, { 18, "COUNTIFS(" + lat + ",1," + who + "," + n + "," + date + "," + d + ")" } };
                     sh.Set(row, 2, name, SummaryStyle(2, "thin", row == last ? "thick" : "thin", false, gray));
                     sh.Set(row, 3, 17.0 / 24, SummaryStyle(3, "thin", row == last ? "thick" : "thin", false, gray, "h:mm"));
@@ -617,7 +677,7 @@ namespace ReviewMerge {
                     int c = 3 + 2 * k; string name = MergeEngine.ExcelColumn(c) + "$4", person = people[k];
                     double elements = rd.Elements.Count(e => Is(e.Who, person) && e.Date.HasValue && (day.HasValue ? e.Date == day : e.Date.Value > 0 && e.Date.Value <= report));
                     double sets = rd.Sets.Count(s => s.Latest && Is(s.Who, person) && s.Date.HasValue && (day.HasValue ? s.Date == day : s.Date.Value <= report));
-                    string[] when = day.HasValue ? new[] { E("P") + ",$B" + r, date + ",$B" + r } : new[] { E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + reportDate, date + ",\">0\"," + date + ",\"<=\"&" + reportDate };
+                    string[] when = day.HasValue ? new[] { E("P") + ",$B" + r, date + ",$B" + r } : new[] { E("P") + ",\">0\"," + E("P") + ",\"<=\"&" + reportDate, date + ",\">=36526\"," + date + ",\"<=\"&" + reportDate };
                     sh.Set(r, c, elements, style(c, "thin", bottom ? "thick" : "thin", !day.HasValue || elements != 0, gray, "0", day.HasValue ? null : Green), "COUNTIFS(" + E("Q") + "," + name + "," + when[0] + ")");
                     sh.Set(r, c + 1, sets, style(c + 1, "thin", bottom ? "thick" : "thin", !day.HasValue || sets != 0, gray, "0", day.HasValue ? null : Green), "COUNTIFS(" + lat + who + "," + name + "," + when[1] + ")");
                     sumElements += elements; sumSets += sets;
@@ -645,14 +705,15 @@ namespace ReviewMerge {
                 int personRow = row;
                 foreach (double? day in new double?[] { null }.Concat((worked ?? new SortedSet<double>()).Select(d => (double?)d))) {
                     string crit = day.HasValue ? ",$B" + row : ",\">0\"", n = "$B$" + personRow; bool bold = !day.HasValue;
+                    Func<string, string> dated = range => range + (day.HasValue ? ",$B" + row : ",\">=36526\"," + range + ",\"<109575\"");
                     Func<double?, bool> on = x => x.HasValue && (day.HasValue ? x == day : x.Value > 0);
                     var whose = rd.Sets.Where(s => s.Latest && Is(s.Who, name) && on(s.Date)).ToList();
                     sh.Set(row, 2, day.HasValue ? (object)day.Value : name, Rs(12, bold, fmt: day.HasValue ? "dd.mm.yyyy" : null, l: "thin", r: "thin", t: "thin", b: "thin"));
                     int number = Rs(12, bold, fmt: "0", l: "thin", r: "thin", t: "thin", b: "thin");
-                    sh.Set(row, 3, whose.Count, number, "COUNTIFS(" + lat + who + "," + n + "," + date + crit + ")");
-                    sh.Set(row, 4, whose.Count(s => s.Cnt > 0), number, "COUNTIFS(" + lat + who + "," + n + "," + date + crit + "," + cnt + ",\">0\")");
+                    sh.Set(row, 3, whose.Count, number, "COUNTIFS(" + lat + who + "," + n + "," + dated(date) + ")");
+                    sh.Set(row, 4, whose.Count(s => s.Cnt > 0), number, "COUNTIFS(" + lat + who + "," + n + "," + dated(date) + "," + cnt + ",\">0\")");
                     sh.Set(row, 5, rd.Elements.Count(e => Is(e.Who, name) && on(e.Date)), number, "COUNTIFS(" + E("Q") + "," + n + "," + E("P") + crit + ")");
-                    sh.Set(row, 6, acts.Checks.Count(x => Is(x.Item1, name) && on(x.Item2)), number, acts.Exists ? "COUNTIFS(" + A(acts.Who) + "," + n + "," + A(acts.Date) + crit + ")" : null);
+                    sh.Set(row, 6, acts.Checks.Count(x => Is(x.Item1, name) && on(x.Item2)), number, acts.Exists ? "COUNTIFS(" + A(acts.Who) + "," + n + "," + dated(A(acts.Date)) + ")" : null);
                     row++;
                 }
             }
@@ -690,7 +751,7 @@ namespace ReviewMerge {
                 foreach (var sheetView in doc.Descendants(N + "sheetView")) { string selected = Is(sheetName, RdSummarySheet) ? "1" : null; if ((string)sheetView.Attribute("tabSelected") != selected) { sheetView.SetAttributeValue("tabSelected", selected); changed = true; } }
                 if (changed) Store(path, doc);
             }
-            Store("xl/workbook.xml", book); Store("xl/_rels/workbook.xml.rels", rels); Store("[Content_Types].xml", types); Store("xl/styles.xml", styles);
+            Store("xl/workbook.xml", book); Store("xl/_rels/workbook.xml.rels", rels); Store("[Content_Types].xml", types); CompactStyles(); Store("xl/styles.xml", styles);
             progress(90, "Сохранение XLSX с формулами");
             using (var s = new FileStream(output, FileMode.CreateNew)) using (var z = new ZipArchive(s, ZipArchiveMode.Create)) {
                 foreach (var item in entries) { token.ThrowIfCancellationRequested(); var e = z.CreateEntry(item.Key, CompressionLevel.Optimal); using (var stream = e.Open()) stream.Write(item.Value, 0, item.Value.Length); }

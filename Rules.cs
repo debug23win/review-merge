@@ -20,10 +20,19 @@ namespace ReviewMerge {
             return s.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim(',', ';')).Where(t => t != "").ToArray();
         }
         static bool IsInitials(string token) { return Regex.IsMatch(token, @"^(?:\p{Lu}\.?){1,3}$") || Regex.IsMatch(token, @"^(?:\p{L}\.){1,3}$"); }
+        static bool IsPatronymic(string token) { return Regex.IsMatch(token, @"^\p{L}{3,}(?:ич|вна|чна|оглы|кызы)$", RegexOptions.IgnoreCase); }
+        // The surname is the first word that is not initials, except for a full name with its patronymic: "КИМ Алексей Петрович"
+        // (a short surname in capitals) and "Пётр Петрович Петров" (first name, patronymic, surname). -1 when there is no word.
+        static int SurnameIndex(string[] tokens) {
+            if (tokens.Length == 3 && IsPatronymic(tokens[2]) && !IsPatronymic(tokens[1]) && Regex.IsMatch(tokens[0], @"^\p{Lu}{2,3}$") && !IsInitials(tokens[1])) return 0;
+            if (tokens.Length == 3 && IsPatronymic(tokens[1]) && !IsPatronymic(tokens[2]) && !IsInitials(tokens[0]) && !IsInitials(tokens[2])) return 2;
+            for (int i = 0; i < tokens.Length; i++) if (!IsInitials(tokens[i])) return i;
+            return -1;
+        }
         public static string Surname(string name) {
             var tokens = NameTokens(name);
             if (tokens.Length == 0) return "";
-            string s = tokens.FirstOrDefault(t => !IsInitials(t)) ?? tokens[0];
+            int index = SurnameIndex(tokens); string s = tokens[index < 0 ? 0 : index];
             s = s.TrimEnd('.');
             if (s.Length > 1 && (s == s.ToLowerInvariant() || s == s.ToUpperInvariant())) s = char.ToUpperInvariant(s[0]) + s.Substring(1).ToLowerInvariant();
             return s;
@@ -32,16 +41,16 @@ namespace ReviewMerge {
         // First name and patronymic in order: a word stays a word, initials give one letter each.
         // "Яковлева Александра Алексеевна" gives АЛЕКСАНДРА, АЛЕКСЕЕВНА; "АА Яковлева" and "Яковлева А.А." give А, А.
         static List<string> GivenNames(string name) {
-            var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)); var result = new List<string>();
-            foreach (string t in tokens) {
-                if (t == surname) { surname = null; continue; }
+            var tokens = NameTokens(name); int surname = SurnameIndex(tokens); var result = new List<string>();
+            for (int i = 0; i < tokens.Length; i++) {
+                string t = tokens[i]; if (i == surname) continue;
                 if (IsInitials(t)) result.AddRange(t.Where(char.IsLetter).Select(ch => ch.ToString())); else result.Add(t.TrimEnd('.'));
             }
             return result.Select(t => t.ToUpperInvariant().Replace('Ё', 'Е')).ToList();
         }
         public static string Initials(string name) { return string.Concat(GivenNames(name).Select(t => t.Substring(0, 1))); }
         // Words besides the surname: 2 for a full name, 0 for initials or a bare surname.
-        public static int Fullness(string name) { var tokens = NameTokens(name); string surname = tokens.FirstOrDefault(t => !IsInitials(t)); return tokens.Count(t => !IsInitials(t)) - (surname == null ? 0 : 1); }
+        public static int Fullness(string name) { var tokens = NameTokens(name); int surname = SurnameIndex(tokens); return Enumerable.Range(0, tokens.Length).Count(i => i != surname && !IsInitials(tokens[i])); }
         // One surname and a name that agrees in every written part: "АА Яковлева" and "Яковлева Александра Алексеевна" agree;
         // "Иванов Алексей Андреевич" and "Иванов Александр Александрович" do not, although their initials are the same.
         public static bool InitialsAgree(string a, string b) {
@@ -51,6 +60,10 @@ namespace ReviewMerge {
                 if (x[i].Length > 1 && y[i].Length > 1 ? x[i] != y[i] : x[i][0] != y[i][0]) return false;
             }
             return true;
+        }
+        // One person in two spellings: the same surname and agreeing given names, or a bare surname ("Петров" and "Петров П.П.").
+        public static bool SamePersonSpelling(string a, string b) {
+            return SurnameKey(a) != "" && SurnameKey(a) == SurnameKey(b) && (GivenNames(a).Count == 0 || GivenNames(b).Count == 0 || InitialsAgree(a, b));
         }
         // Same person written identically apart from case, spaces after initials and Ё.
         public static string NameKey(string name) { return Regex.Replace(CleanName(name), @"\.\s+", ".").ToUpperInvariant().Replace('Ё', 'Е'); }

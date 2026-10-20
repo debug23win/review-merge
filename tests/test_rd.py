@@ -22,6 +22,14 @@ STAGE = [('1.1', 'Мост', [('К1', 'Да'), ('К2', 'Да'), ('К3', 'Зам�
 NAME = {el: name for el, name, _ in STAGE}
 LETTER = {'К3': datetime(2026, 10, 6)}  # the date of the letter of ТЭ («Дата», column K of «Ведомость»)
 D = lambda day: datetime(2026, 10, day)
+NB = '\u00a0'
+
+
+def xt(cell):
+    """Rules.ExcelText: the cell as the formulas read it, pasted no-break spaces, tabs and line breaks as spaces."""
+    s = cell + '&""'
+    for token in ('"\u00a0"', 'CHAR(9)', 'CHAR(10)', 'CHAR(13)', '"\u202f"', '"\u2007"'): s = 'SUBSTITUTE(%s,%s," ")' % (s, token)
+    return 'TRIM(%s)' % s
 
 
 def form(path, rows, stage=True, acts=(), formula_rows=0, extra=None, heads=HEADS):
@@ -121,7 +129,7 @@ assert (get('К3', 'Проверил'), get('К3', 'Дата проверки'))
 status = {c: mv.cell(r, COL['Статус комплекта']).value for c, r in codes.items()}
 # «Примечание» is a comment in RD by default: Д1 with a note is ready, «Видов замечаний» counts the flags only.
 assert status == {'К1': 'готово к ВПР', 'К2': 'готово к ВПР', 'К3': 'замечания', 'Т1': 'готово к ВПР', 'Т2': 'замечания', 'Д1': 'готово к ВПР'}, status
-assert mv.cell(codes['Д1'], COL['Видов замечаний']).value == 0 and 'TRIM(' not in m.cell(7, COL['Видов замечаний']).value, m.cell(7, COL['Видов замечаний']).value
+assert mv.cell(codes['Д1'], COL['Видов замечаний']).value == 0 and '$AB7' not in m.cell(7, COL['Видов замечаний']).value, m.cell(7, COL['Видов замечаний']).value
 assert all(str(m.cell(r, COL[k]).value).startswith('=') for r in range(7, 7 + 6 + 50) for k in ('Сверка с ВЭ РД', 'Статус комплекта', 'Действующая редакция', 'Элемент строки'))
 assert '$D$7:$D$62' in m.cell(7, COL['Действующая редакция']).value, m.cell(7, COL['Действующая редакция']).value
 
@@ -168,7 +176,7 @@ noted = form(B / 'Примечание.xlsx', [row('К1', '1.1', who='Анна',
 assert 'error' not in build(noted, vera, switches=['--notes-as-remarks'])
 nm, nv = load_workbook(noted)[MAIN], load_workbook(noted, data_only=True)[MAIN]
 d1 = next(r for r in range(7, nm.max_row + 1) if nm.cell(r, COL['Шифр РД']).value == 'Д1')
-assert (nv.cell(d1, COL['Статус комплекта']).value, nv.cell(d1, COL['Видов замечаний']).value) == ('замечания', 1) and 'TRIM($' in nm.cell(7, COL['Видов замечаний']).value
+assert (nv.cell(d1, COL['Статус комплекта']).value, nv.cell(d1, COL['Видов замечаний']).value) == ('замечания', 1) and 'LEN(' + xt('$AB7') + ')>0' in nm.cell(7, COL['Видов замечаний']).value
 nst = load_workbook(noted, data_only=True)['Статистика']
 assert any(nst.cell(r, 1).value == 'Примечание (текст в столбце «Примечание»)' and nst.cell(r, 2).value == 1 for r in range(6, nst.max_row + 1))
 assert load_workbook(noted, data_only=True)['СВОД']['D4'].value == 'Всего комплектов\nс замечаниями: 2'
@@ -179,7 +187,10 @@ before = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги п�
 again = build(target, boris, vera)
 after = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги проверки', 'Элементы') for r in load_workbook(target, data_only=True)[n].iter_rows() for c in r}
 assert again['Documents'] == 6 and before == after, [k for k in before if before[k] != after.get(k)][:10]
+styles = lambda: __import__('zipfile').ZipFile(target).read('xl/styles.xml')
+grown = len(styles())
 alone = build(target)
+assert len(styles()) == grown, 'a rebuild must not add styles to styles.xml'
 assert alone['Files'] == 0 and alone['Documents'] == 6 and alone['Boxes'] == 3, alone
 
 # A form with prepared formula rows: the ranges of the formulas, of other sheets and of the validation follow the data down.
@@ -205,8 +216,8 @@ sets_not_in_stage = [load_workbook(grown, data_only=True)[MAIN].cell(r, COL['С�
 assert set(sets_not_in_stage) == {'нет в ВЭ РД'}, set(sets_not_in_stage)
 
 # The row of column numbers moved among the data by a sort: skipped in a reviewer's copy, the consolidated book is not touched.
-def numbers_at_end(path):
-    wb = load_workbook(path); m = wb[MAIN]; values = [c.value for c in m[6]]; m.delete_rows(6); last = max(r for r in range(1, m.max_row + 1) if m.cell(r, 4).value) + 1
+def numbers_at_end(path, code=4):
+    wb = load_workbook(path); m = wb[MAIN]; values = [c.value for c in m[6]]; m.delete_rows(6); last = max(r for r in range(1, m.max_row + 1) if m.cell(r, code).value) + 1
     for c, v in enumerate(values, 1): m.cell(last, c, v)
     wb.save(path); return path
 copy = numbers_at_end(form(B / 'Копия с номерами.xlsx', [row('Т1', '1.2', who='Борис', date=D(6))]))
@@ -247,7 +258,7 @@ assert priority == {**expected, 'Т2': None, 'Д1': 1}, priority
 assert pv.cell(rows_due['К1'], DUE['Дата завершения проверки']).value == dt(due['К1']) and pv.cell(rows_due['Т1'], DUE['Дата завершения проверки']).value == dt(due['Т1'])
 assert pv.cell(rows_due['Д1'], DUE['Дата завершения проверки']).value == dt(due['К2'])
 formula = pm.cell(7, DUE['Приоритет проверки ']).value
-assert formula == '=IF($D7="","",IF(ISNUMBER($N7),IFERROR(IF(TODAY()>=WORKDAY($N7,-7),1,2),""),""))', formula
+assert formula == '=IF(' + xt('$D7') + '="","",IF(AND(ISNUMBER($N7),$N7>=36526,$N7<109575),IFERROR(IF(TODAY()>=WORKDAY($N7,-7),1,2),""),""))', formula
 assert pv.cell(rows_due['К2'], DUE['Статус комплекта']).value == 'не проверен' and pv.cell(rows_due['К1'], DUE['Статус комплекта']).value == 'готово к ВПР'
 rules = [(str(cf.sqref), rule.operator, rule.formula) for cf in pm.conditional_formatting for rule in cf.rules]
 assert rules.count(('O7:O%d' % (rows_due['Д1'] + 50), 'equal', ['1'])) == 1, rules
@@ -285,4 +296,110 @@ wrong = base_file(B / 'Чужая база.xlsx', updated, heading='Статус
 before = Path(based).read_bytes()
 refused = build(based, switches=['--rd-base=' + str(wrong)])
 assert 'error' in refused and 'не совпадает' in refused['error'] and Path(based).read_bytes() == before, refused
-print('RD tests passed: merge by set code, new sets after the data, statuses, notes as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, stage list from the base file')
+
+# Pasted spaces: a reviewer, «Замечания устранены» or «Примечание» of spaces, a no-break space or a tab only is empty for the program and the formulas
+# (the cell is cleared); a mark typed as text becomes the number 1; a code with a no-break space or doubled spaces is found in «Ведомость»;
+# a reviewer with outer spaces gets the one spelling; «0,0» does not resolve remarks.
+def doubled_space(wb): wb['Ведомость'].cell(8, 4, 'К  2')
+blank = form(B / 'Пробелы.xlsx', [row('К1', '1.1', who='   ', date=D(5)), row('К 2', who=NB, date=D(5)), row('К3', who='Анна', date=D(5), П1=1, fixed=NB + '\t'),
+                                  row('Т1', '1.2', who='Анна', date=D(5), П2='1'), row('Т2', who=' Анна', date=D(6), note=NB),
+                                  row('Д1' + NB, '1.3', who='Анна ', date=D(5), П3=1, fixed='0,0')], extra=doubled_space)
+spaced = build(blank, switches=['--notes-as-remarks'])
+assert 'error' not in spaced and spaced['Reviewed'] == 4 and spaced['PeopleMerges'] == [], spaced
+xm, xv = load_workbook(blank)[MAIN], load_workbook(blank, data_only=True)[MAIN]
+look = lambda r, key: xv.cell(r, COL[key]).value
+assert [look(r, 'Статус комплекта') for r in range(7, 13)] == ['не проверен', 'не проверен', 'замечания', 'замечания', 'готово к ВПР', 'замечания'], [look(r, 'Статус комплекта') for r in range(7, 13)]
+assert [look(r, 'Сверка с ВЭ РД') for r in range(7, 13)] == ['да'] * 6 and [look(r, 'Видов замечаний') for r in range(7, 13)] == [0, 0, 1, 1, 0, 1]
+assert (look(7, 'Проверил'), look(8, 'Проверил'), look(9, 'Замечания устранены'), look(11, 'Примечание'), look(11, 'Проверил'), look(12, 'Проверил')) == (None, None, None, None, 'Анна', 'Анна')
+assert xv.cell(10, COL['П2']).data_type == 'n' and look(10, 'П2') == 1 and look(12, 'Замечания устранены') == '0,0'
+assert 'LEN(' + xt('$L7') + ')=0' in xm.cell(7, COL['Статус комплекта']).value and 'ISLOGICAL($AE7)' in xm.cell(7, COL['Статус комплекта']).value
+assert xm.cell(7, COL['Сверка с ВЭ РД']).value.startswith('=IF(' + xt('$D7') + '="",""') and load_workbook(blank)['Ведомость'].cell(7, 33).value == '=' + xt('$D7')
+xst = load_workbook(blank, data_only=True)['Статистика']
+xstats = {xst.cell(r, 1).value: xst.cell(r, 2).value for r in range(6, xst.max_row + 1) if xst.cell(r, 1).value}
+assert (xstats['Проверено по состоянию на дату отчёта (как в «СВОД»)'], xstats['Примечание (текст в столбце «Примечание»)']) == (4, 0), xstats
+assert_sums(blank)
+before = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Элементы', 'Статистика') for r in load_workbook(blank, data_only=True)[n].iter_rows() for c in r}
+build(blank, switches=['--notes-as-remarks'])
+after = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Элементы', 'Статистика') for r in load_workbook(blank, data_only=True)[n].iter_rows() for c in r}
+assert before == after, [k for k in before if before[k] != after.get(k)][:10]
+# A code of spaces only is no set and breaks the element carried down, on both sides; a mark is never a COUNTIF criterion of an element («7.10» is not 7.1).
+chain = form(B / 'Шифр из пробелов.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row(' ', who='Анна', date=D(5)), row('К2', who='Анна', date=D(5))])
+broken = build(chain)
+assert 'error' not in broken and broken['Documents'] == 2 and any('строка 8: Есть данные проверки, но нет шифра РД' in p for p in broken['ProblemList']), broken
+cv, cm = load_workbook(chain, data_only=True)[MAIN], load_workbook(chain)[MAIN]
+assert [cv.cell(r, COL['Элемент строки']).value or '' for r in (7, 8, 9)] == ['1.1', '', ''] and cv.cell(9, COL['Сверка с ВЭ РД']).value == 'элемент 1.1' and cv.cell(8, COL['Статус комплекта']).value in (None, '')
+assert 'SUMPRODUCT(--($AI$7:$AI9=$AI9))=1' in cm.cell(9, COL['Порядковый № элемента']).value and xt('$A9') in cm.cell(9, COL['Элемент строки']).value
+ce = load_workbook(chain)['Элементы']
+assert all('COUNTIF' not in ce.cell(6, c).value for c in (4, 5, 7, 8, 9, 10, 11, 16, 18)), [ce.cell(6, c).value for c in (4, 5)]
+
+# A set repeated in the consolidated book is merged into its first row and is not a current edition; «Изм.» typed as text becomes a number.
+repeated = form(B / 'Повтор.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('К2', who='Анна', date=D(5)), row('К2', rev='1', who='Анна', date=D(6)),
+                                    row('К1', who='Борис', date=D(6), П1=1, text='дубль')])
+twice = build(repeated)
+assert 'error' not in twice and twice['Documents'] == 3 and any('строка 10: Повтор комплекта' in p and 'не считается действующей редакцией' in p for p in twice['ProblemList']), twice
+rv, rm = load_workbook(repeated, data_only=True)[MAIN], load_workbook(repeated)[MAIN]
+assert [rv.cell(r, COL['Действующая редакция']).value for r in range(7, 11)] == [1, 0, 1, 0] and rv.cell(9, COL['Изм.']).value == 1 and rv.cell(9, COL['Изм.']).data_type == 'n'
+assert [rv.cell(r, COL['Статус комплекта']).value for r in range(7, 11)] == ['замечания', 'готово к ВПР', 'готово к ВПР', 'замечания'] and rv.cell(7, COL['П1']).value == 1
+assert (rv.cell(10, COL['Проверил']).value, rv.cell(10, COL['Замечания (текст для письма подрядчику)']).value) == ('Борис', 'дубль'), 'the repeated row is kept'
+assert '$D$7:$D9' in rm.cell(10, COL['Действующая редакция']).value
+rel = load_workbook(repeated, data_only=True)['Элементы']
+assert [rel.cell(6, c).value for c in (1, 4, 5, 8, 9)] == ['1.1', 3, 2, 2, 1], [rel.cell(6, c).value for c in (1, 4, 5, 8, 9)]
+assert_sums(repeated)
+
+# Dates the program does not read — text, a number outside 2000–2199 — leave their set unchecked without breaking other elements; a deadline
+# beyond Excel dates gives no priority instead of an error.
+odd = form(B / 'Даты.xlsx', [row('К1', '1.1', who='Анна', date=D(5), due=3000000), row('К2', who='Анна', date=D(6)), row('К3', who='ТЭ'),
+                             row('Т1', '1.2', who='Борис', date='вчера'), row('Т2', who='Борис', date=12)], heads=HEADS_DUE)
+dated = build(odd)
+assert 'error' not in dated and sum('Дата проверки не распознана' in p for p in dated['ProblemList']) == 2, dated
+ov = load_workbook(odd, data_only=True)
+assert ov[MAIN].cell(7, DUE['Приоритет проверки ']).value is None
+assert [ov['Элементы'].cell(r, 16).value for r in (6, 7)] == [D(6), None] and ov['Элементы'].cell(6, 17).value == 'ТЭ'
+assert '_xlfn.AGGREGATE(14,6,' in load_workbook(odd)['Элементы'].cell(6, 16).value
+ost = ov['Статистика']; assert {ost.cell(r, 1).value: ost.cell(r, 2).value for r in range(6, 12)}['Проверено по состоянию на дату отчёта (как в «СВОД»)'] == 3
+assert_sums(odd)
+
+# «Проверка актов»: the element number with spaces around it is found, a reviewer of spaces only is cleared (not checked),
+# a result typed in «Результат проверки акта» is what «Элементы» shows.
+acted = form(B / 'Акты.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('Т1', '1.2', who='Борис', date=D(6)), row('Д1', '1.3', who='Вера', date=D(7))],
+             acts=[{2: '1.1 ', 6: '   ', 7: D(8), 8: 1}, {2: '1.2', 6: 'Борис', 7: D(8), 8: 1, 12: 'соответствует'}, {2: ' 1.3', 6: 'Вера', 7: D(8), 9: 1, 11: NB}])
+assert 'error' not in build(acted)
+av = load_workbook(acted, data_only=True)
+assert [av['Элементы'].cell(r, 13).value for r in (6, 7, 8)] == ['не проверен', 'соответствует', 'замечания'], [av['Элементы'].cell(r, 13).value for r in (6, 7, 8)]
+assert (av['Проверка актов'].cell(7, 6).value, av['Проверка актов'].cell(9, 11).value) == (None, None)
+ast = av['Статистика']; acts_lines = {ast.cell(r, 1).value: ast.cell(r, 2).value for r in range(6, ast.max_row + 1)}
+assert (acts_lines['Проверено актов'], acts_lines['Из них с замечаниями']) == (2, 1), acts_lines
+assert 'MATCH(1,INDEX(--(' + xt("'Проверка актов'!$B$7:$B$100") + '=$A6),0),0)' in load_workbook(acted)['Элементы'].cell(6, 13).value
+
+# A mark «1» typed as text and «0,0» in «Замечания устранены» leave the remarks of the act open, as Excel counts them.
+marked = form(B / 'Акты текстом.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('Т1', '1.2', who='Борис', date=D(6)), row('Д1', '1.3', who='Вера', date=D(7))],
+              acts=[{2: '1.1', 6: 'Анна', 7: D(8), 8: '1'}, {2: '1.2', 6: 'Борис', 7: D(8), 9: 1, 11: '0,0'}, {2: '1.3', 6: 'Вера', 7: D(8), 8: ' 1', 11: 'нет'}])
+assert 'error' not in build(marked)
+mv = load_workbook(marked, data_only=True)
+assert [mv['Элементы'].cell(r, 13).value for r in (6, 7, 8)] == ['замечания'] * 3, [mv['Элементы'].cell(r, 13).value for r in (6, 7, 8)]
+
+# A copy without the element columns whose row of column numbers a sort moved under the data: the row is skipped, not merged as set «2».
+no_element = [h for h in HEADS if h not in ('Номер элемента', 'Наименование элемента')]
+plain = numbers_at_end(form(B / 'Копия без элементов.xlsx', [row('Т1', who='Борис', date=D(6))], heads=no_element), code=no_element.index('Шифр РД') + 1)
+moved = build(form(B / 'Сводная 4.xlsx', [row('К1', '1.1', who='Анна', date=D(5))]), plain)
+assert 'error' not in moved and moved['Documents'] == 2 and any('номерами столбцов' in p for p in moved['ProblemList']) and moved['ConvertedMarks'] == [], moved
+
+# An empty date of the consolidated book filled from the same reviewer's file is no conflict.
+own = form(B / 'Дата из файла.xlsx', [row('К1', '1.1', who='Анна', date=D(5)), row('К2', who='Анна')])
+mine = form(B / 'Анна РД.xlsx', [row('К2', '1.1', who='Анна', date=D(6))])
+filled = build(own, mine)
+assert 'error' not in filled and filled['ConflictList'] == [] and load_workbook(own, data_only=True)[MAIN].cell(8, COL['Дата проверки']).value == D(6), filled['ConflictList']
+
+# A damaged base file is named in Russian; the book does not change.
+damaged = B / 'Битая база.xlsx'; damaged.write_bytes(b'not a zip file')
+before = Path(based).read_bytes()
+refused = build(based, switches=['--rd-base=' + str(damaged)])
+assert 'error' in refused and 'Битая база.xlsx: не удалось прочитать книгу .xlsx' in refused['error'] and Path(based).read_bytes() == before, refused
+# An empty --rd-base= (an unset variable of a script) means no base, as the empty field of the window.
+error = Path(str(based) + '.error.txt'); error.unlink()
+assert 'error' not in build(based, switches=['--rd-base='])
+# --pdf with a date other than the report date of the book («СВОД»!U2) is refused: the tables show the data of the build date.
+result = subprocess.run([str(EXE), '--pdf', str(based), '2026-10-09'], timeout=120)
+assert result.returncode == 1 and 'рассчитана на дату свода 08.10.2026' in error.read_text(encoding='utf-8-sig') and not list(B.glob('С базой* 2026.10.09.pdf')), result
+error.unlink()
+print('RD tests passed: merge by set code, new sets after the data, statuses, notes as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, stage list from the base file, empty base switch, PDF date check')
