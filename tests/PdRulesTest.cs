@@ -16,6 +16,9 @@ class PdRulesTest {
         Check(XlsxReader.Normal("№ тома")=="№ ТОМА","Numero sign changed");
         Check(Rules.VolumeKey("Документ Фрагмент №1","pdf")==Rules.VolumeKey("Документ Фрагмент №2","pdf"),"Numbered fragments not grouped");
         Check(!Rules.IsUl("Путепровод на ул Мира","pdf")&&Rules.IsUl("Том-УЛ-ГТСС1","pdf"),"Street confused with IUL");
+        Check(Rules.Surname("КИМ Алексей Петрович")=="Ким"&&Rules.Surname("ЦОЙ Виктор Робертович")=="Цой"&&Rules.InitialsAgree("КИМ Алексей Петрович","Ким А.П.")&&Rules.Fullness("КИМ Алексей Петрович")==2,"Short surname in capitals read as initials");
+        Check(Rules.Surname("Пётр Петрович Петров")=="Петров"&&Rules.Surname("Петров Пётр Петрович")=="Петров"&&Rules.Surname("АА Яковлева")=="Яковлева"&&Rules.Surname("Яковлева А.А.")=="Яковлева"&&Rules.Fullness("Яковлева Александра Алексеевна")==2&&Rules.Fullness("АА Яковлева")==0,"Surname of a full name");
+        Check(Rules.SamePersonSpelling("Петров","Петров П.П.")&&Rules.SamePersonSpelling("Иванов И.И.","Иванов Иван Иванович")&&!Rules.SamePersonSpelling("Анна","Борис")&&!Rules.SamePersonSpelling("Иванов А.А.","Иванов Б.Б."),"Spellings of one person");
         Check(Rules.VolumeKey("Путепровод на ул Мира","pdf")!=Rules.VolumeKey("Путепровод на ул Ленина","pdf"),"Street names merged");
         var rows=new List<MergedRow>();foreach(string name in new[]{"Проект А","Проект Б"}){var row=new MergedRow{Values=new object[20],VolumeNumber="б/н 2"};row.Values[2]=name;row.Values[3]="pdf";rows.Add(row);}
         var keys=Rules.VolumeKeys(rows);Check(keys[0]!=keys[1],"Placeholder volume numbers merged unrelated projects");

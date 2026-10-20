@@ -102,6 +102,15 @@ namespace ReviewMerge {
         static void AddProblem(MergeResult r, SourceRow row, string detail) {
             r.Problems.Add(new Problem { File = row.File, Row = row.Row, Document = Txt(row.Values[2]), Detail = detail });
         }
+        const string NoDate = "Указан проверяющий, но отсутствует дата проверки.";
+        // The row whose check date the merged record has: a file with that date, otherwise the consolidated book.
+        static SourceRow DateSource(MergedRow row, double date) {
+            return row.Reviews.LastOrDefault(r => XlsxReader.DateSerial(r.Values[9]) == date) ?? row.TargetRow ?? row.Reviews.LastOrDefault();
+        }
+        static void AddDateProblem(MergeResult r, MergedRow row, double date, string detail) {
+            var source = DateSource(row, date); string text = "Дата проверки " + DateTime.FromOADate(date).ToString("dd.MM.yyyy", Inv) + " " + detail;
+            r.Problems.Add(new Problem { File = source == null ? "" : source.File, Row = source == null ? 0 : source.Row, Document = Txt(row.Values[2]), Detail = text });
+        }
         static bool HasReview(SourceRow r) { return r.Values.Skip(8).Any(v => Txt(v) != "") || Txt(r.VolumeNumber) != ""; }
         static object Flag(object value) {
             string s = Txt(value);
@@ -210,9 +219,13 @@ namespace ReviewMerge {
         public static MergeResult Collect(IList<string> files, string sheetName, DateTime asOf, Action<int,string> progress, CancellationToken token, MergeOptions options=null, bool existingTarget=false, DateTime? importDate=null) {
             if (files.Count == 0) throw new InvalidOperationException("Добавьте хотя бы один файл .xlsx.");
             options = options ?? new MergeOptions();
-            bool currentDateForNewReviews = options.CurrentDateForNewReviews;
+            // «Пересчитать статистику» changes no register data: no current date, no converted marks, no filled boxes.
+            bool recalculate = options.RecalculateHistory;
+            bool currentDateForNewReviews = options.CurrentDateForNewReviews && !recalculate;
             var result = new MergeResult { Files = files.Count };
             var byKey = new Dictionary<string, MergedRow>(StringComparer.Ordinal);
+            // Documents with a CRC32 by name, format, upload date and time: a row of another file without CRC32 finds its document here.
+            var byLooseKey = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             var marks = new List<KeyValuePair<SourceRow, int>>();
             for (int fi = 0; fi < files.Count; fi++) {
                 Check(token);
@@ -228,13 +241,23 @@ namespace ReviewMerge {
                 var seenInFile = new HashSet<string>();
                 foreach (var row in source.Rows) {
                     Check(token);
-                    string key = XlsxReader.Key(row);
+                    string key = XlsxReader.Key(row), crcNote = null;
+                    if (Txt(row.Values[7]) == "") {
+                        List<string> found;
+                        crcNote = "Не указана контрольная сумма: идентификация выполнена по остальным реквизитам.";
+                        if (fi > 0 && !byKey.ContainsKey(key)) {
+                            if (!byLooseKey.TryGetValue(XlsxReader.LooseKey(row), out found)) crcNote = "Не указана контрольная сумма, а документа с такими именем, форматом, датой и временем выгрузки нет: запись добавлена отдельным документом.";
+                            else if (found.Count > 1) crcNote = "Не указана контрольная сумма, а по имени, формату, дате и времени выгрузки подходят несколько документов: запись добавлена отдельным документом.";
+                            else { key = found[0]; crcNote = "Не указана контрольная сумма: документ найден по имени, формату, дате и времени выгрузки (CRC32 " + Txt(byKey[key].Values[7]) + ")."; }
+                        }
+                    }
                     if (!seenInFile.Add(key)) AddProblem(result, row, fi == 0 ? "Повтор записи в сводном документе с одинаковыми именем, форматом, CRC32 и временем выгрузки. Объединён с первой записью; обе строки получают одинаковые данные проверки." : "Повтор записи с одинаковыми именем, форматом, CRC32 и временем выгрузки. Объединён с первой записью.");
-                    if (Txt(row.Values[7]) == "" && HasReview(row)) AddProblem(result, row, "Не указана контрольная сумма: идентификация выполнена по остальным реквизитам.");
+                    if (crcNote != null && HasReview(row)) AddProblem(result, row, crcNote);
                     MergedRow merged;
                     if (!byKey.TryGetValue(key, out merged)) {
                         merged = new MergedRow { Values = (object[])row.Values.Clone(), VolumeNumber = row.VolumeNumber, TargetRow = fi == 0 ? row : null };
                         byKey.Add(key, merged); result.Rows.Add(merged);
+                        if (Txt(row.Values[7]) != "") { List<string> same; string loose = XlsxReader.LooseKey(row); if (!byLooseKey.TryGetValue(loose, out same)) byLooseKey[loose] = same = new List<string>(); same.Add(key); }
                     } else if (fi == 0 && merged.TargetRow != null) merged.TargetDuplicates.Add(row);
                     if (Txt(row.Resolved) != "") merged.Resolved = row.Resolved;
                     if (!HasReview(row)) continue;
@@ -243,7 +266,7 @@ namespace ReviewMerge {
                     if (!suppliedDate&&Txt(row.Values[9]) != "" && !XlsxReader.DateSerial(row.Values[9]).HasValue)
                         AddProblem(result, row, "Дата проверки в источнике не распознана.");
                     if (!suppliedDate&&Txt(row.Values[8]) != "" && Txt(row.Values[9]) == "")
-                        AddProblem(result, row, "Указан проверяющий, но отсутствует дата проверки.");
+                        AddProblem(result, row, NoDate);
                     for (int col = 12; col < 18; col++) {
                         if (Flag(row.Values[col]) is string) marks.Add(new KeyValuePair<SourceRow, int>(row, col));
                     }
@@ -257,7 +280,7 @@ namespace ReviewMerge {
             // Marks such as "да", "+" or "х" become 1 only when the operator agrees; otherwise they stay as written and are reported.
             foreach (var g in marks.GroupBy(m => XlsxReader.Normal(m.Key.Values[m.Value]))) {
                 var cells = g.ToList(); string shown = Txt(cells[0].Key.Values[cells[0].Value]);
-                bool toOne = options.ConvertMark != null && options.ConvertMark(shown, cells.Count);
+                bool toOne = !recalculate && options.ConvertMark != null && options.ConvertMark(shown, cells.Count);
                 foreach (var m in cells) {
                     if (!toOne) { AddProblem(result, m.Key, "Недопустимая отметка в " + m.Key.Columns.Letter(m.Value + 1) + ": «" + Txt(m.Key.Values[m.Value]) + "». Допустимы 1, 0 или пусто."); continue; }
                     if (m.Key.Written == null) m.Key.Written = (object[])m.Key.Values.Clone();
@@ -273,7 +296,8 @@ namespace ReviewMerge {
                 merged.VolumeNumber = existingTarget && merged.TargetRow != null && Txt(merged.TargetRow.VolumeNumber) != "" ? merged.TargetRow.VolumeNumber : numbered.Count == 0 ? null : Latest(numbered).VolumeNumber;
                 if (!result.Columns.HasVolumeNumber && Txt(merged.VolumeNumber) != "")
                     throw new InvalidDataException("В источнике заполнен «Номер тома», а в сводном документе этого столбца нет. Добавьте «Номер тома» сразу после «Короб»: данные не записаны и не потеряны.");
-                if (numbered.Select(r => r.VolumeNumber).Distinct(StringComparer.Ordinal).Count() > 1)
+                bool numberDecided = existingTarget && merged.TargetRow != null && Txt(merged.TargetRow.VolumeNumber) != "" && numbered.Any(r => r != merged.TargetRow && XlsxReader.Normal(r.VolumeNumber) == XlsxReader.Normal(merged.TargetRow.VolumeNumber));
+                if (!numberDecided && numbered.Select(r => r.VolumeNumber).Distinct(StringComparer.Ordinal).Count() > 1)
                     result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = "M — Номер тома", Details = string.Join("\n",numbered.Select(r => Path.GetFileName(r.File) + ", строка " + r.Row + ": " + r.VolumeNumber)), Decision = "Заполненный номер сводного документа сохранён; иначе выбран номер последнего датированного источника. Требуется сверка." });
                 var named = reviews.Where(r => Txt(r.Values[8]) != "").ToList();
                 SourceRow winner = Latest(named.Count > 0 ? named : reviews);
@@ -300,9 +324,13 @@ namespace ReviewMerge {
                     double? keptDate = XlsxReader.DateSerial(kept.Values[9]);
                     if (Txt(kept.Values[9]) != "") merged.Values[9] = keptDate.HasValue ? (object)keptDate.Value : kept.Values[9];
                     else {
-                        var same = Latest(named.Where(r => r != kept && Rules.NameKey(Txt(r.Values[8])) == Rules.NameKey(Txt(kept.Values[8]))));
+                        // An empty date takes the latest check of the same person: the same spelling, otherwise the same surname with agreeing initials.
+                        string keptName = Txt(kept.Values[8]);
+                        var same = Latest(named.Where(r => r != kept && Rules.NameKey(Txt(r.Values[8])) == Rules.NameKey(keptName)));
+                        if (same == null) same = Latest(named.Where(r => r != kept && XlsxReader.DateSerial(r.Values[9]).HasValue && Rules.SamePersonSpelling(keptName, Txt(r.Values[8]))));
                         double? sameDate = same == null ? null : XlsxReader.DateSerial(same.Values[9]);
                         merged.Values[9] = same == null ? null : sameDate.HasValue ? (object)sameDate.Value : same.Values[9];
+                        if (sameDate.HasValue) result.Problems.RemoveAll(p => p.File == kept.File && p.Row == kept.Row && p.Detail == NoDate);
                     }
                 }
                 merged.Values[18] = JoinNotes(reviews,18); merged.Values[19] = JoinNotes(reviews,19);
@@ -321,6 +349,8 @@ namespace ReviewMerge {
                     var distinct = active.Select(r => col == 9 ? Pretty(col,r.Values[col]) : XlsxReader.Normal(col >=12 && col<18 ? Flag(r.Values[col]) : r.Values[col])).Distinct().ToList();
                     if (distinct.Count < 2) continue;
                     if (target != null && active.Contains(target) && active.Where(r => r != target).All(r => Contained(col, r.Values[col], target.Values[col]))) continue;
+                    // The kept I:L value of the consolidated book is the value of one of the files: the difference was decided by an earlier build.
+                    if (target != null && col <= 11 && active.Contains(target) && Txt(target.Values[col <= 9 ? 8 : col]) != "" && active.Any(r => r != target && (col <= 9 ? Rules.NameKey(Txt(r.Values[8])) == Rules.NameKey(Txt(target.Values[8])) && Pretty(9, r.Values[9]) == Pretty(9, target.Values[9]) : XlsxReader.Normal(r.Values[col]) == XlsxReader.Normal(target.Values[col])))) continue;
                     string decision = col <= 11 && target != null && Txt(target.Values[col <= 9 ? 8 : col]) != "" ? "Значение сводного документа сохранено: из присланных файлов обновляются только отметки и замечания ("+result.Columns.Letter(13)+":"+result.Columns.Letter(20)+")." :
                         col == 8 || col == 9 ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                         col == 10 || col == 11 ? "Первое непустое значение в порядке файлов; требуется сверка реквизитов." :
@@ -330,23 +360,39 @@ namespace ReviewMerge {
                 }
             }
             result.VolumeKeys = Rules.VolumeKeys(result.Rows, result.VolumeMerges);
+            // A row with a box but without «Вид документации» takes the only kind of its volume, so the box is not split into a «Не указан» box.
+            if (!recalculate)
+                foreach (var g in Enumerable.Range(0, result.Rows.Count).GroupBy(i => result.VolumeKeys[i], StringComparer.Ordinal)) {
+                    var kinds = g.Select(i => XlsxReader.Normal(result.Rows[i].Values[10])).Where(k => k != "").Distinct().ToList();
+                    if (kinds.Count != 1) continue;
+                    foreach (var row in g.Select(i => result.Rows[i]).Where(r => Txt(r.Values[10]) == "" && Txt(r.Values[11]) != "")) {
+                        row.Values[10] = kinds[0]; var source = row.TargetRow ?? row.Reviews.FirstOrDefault();
+                        if (source != null) AddProblem(result, source, "Не указан вид документации: взят вид тома «" + kinds[0] + "».");
+                    }
+                }
             var incomplete = FindIncompleteBoxes(result);
-            var selected = incomplete.Count > 0 && options.FillIncomplete != null ? options.FillIncomplete(incomplete) : null;
+            var selected = incomplete.Count > 0 && options.FillIncomplete != null && !recalculate ? options.FillIncomplete(incomplete) : null;
             foreach (var box in incomplete) {
                 if (selected != null && selected.Contains(box)) { Fill(result, box); result.FilledBoxes.Add(box); }
                 else result.IncompleteBoxes.Add(box);
             }
             result.Documents = result.Rows.Count;
-            DateTime min = asOf.Date;
+            DateTime min = asOf.Date; MergedRow earliest = null;
             foreach (var row in result.Rows) {
                 if (Txt(row.Values[8]) != "") {
                     result.Reviewed++;
-                    double? d = XlsxReader.DateSerial(row.Values[9]);
-                    if (d.HasValue && DateTime.FromOADate(d.Value) < min) min = DateTime.FromOADate(d.Value);
+                    double? d = XlsxReader.DateSerial(row.Values[9]), upload = XlsxReader.DateSerial(row.Values[5]);
+                    if (d.HasValue && DateTime.FromOADate(d.Value) < min) { min = DateTime.FromOADate(d.Value); earliest = row; }
+                    if (d.HasValue && upload.HasValue && d.Value < upload.Value) AddDateProblem(result, row, d.Value, "раньше даты выгрузки файла " + DateTime.FromOADate(upload.Value).ToString("dd.MM.yyyy", Inv) + ": проверьте столбец J.");
+                    if (d.HasValue && d.Value > asOf.Date.ToOADate()) AddDateProblem(result, row, d.Value, "позже даты отчёта " + asOf.ToString("dd.MM.yyyy", Inv) + ": том не входит в этот отчёт; проверьте столбец J.");
                 }
                 if (row.Values.Skip(12).Take(6).Any(Rules.IsRemarkMark) || Txt(row.Values[18]) != "" || options.NotesCount && Txt(row.Values[19]) != "") result.WithIssues++;
             }
-            if ((asOf.Date-min.Date).TotalDays > 730) throw new InvalidDataException("Период проверки больше двух лет. Проверьте даты в столбце J.");
+            if ((asOf.Date-min.Date).TotalDays > 730) {
+                var source = DateSource(earliest, min.ToOADate());
+                throw new InvalidDataException("Период проверки больше двух лет: самая ранняя дата проверки " + min.ToString("dd.MM.yyyy", Inv) + " — «" + Txt(earliest.Values[2]) + "»" +
+                    (source != null ? " (" + Path.GetFileName(source.File) + ", строка " + source.Row + ")" : "") + ". Проверьте даты в столбце J.");
+            }
             for (var d=min.Date;d<=asOf.Date;d=d.AddDays(1)) result.Dates.Add(d);
             return result;
         }
@@ -367,10 +413,17 @@ namespace ReviewMerge {
                 try {using(var check=new FileStream(output,FileMode.Open,FileAccess.ReadWrite,FileShare.None)){} before=Digest(output);}
                 catch(IOException) {throw new IOException("Закройте сводный документ в Excel и повторите сборку: файл занят другой программой.");}
             }
+            // «Пересчитать статистику» uses the consolidated book alone; reviewer files given with it are not loaded.
+            if(options.RecalculateHistory) {
+                if(!exists)throw new InvalidOperationException("Пересчёт статистики выполняется по существующему сводному документу: "+Path.GetFileName(output)+" не найден.");
+                var ignored=files.Select(Path.GetFullPath).Where(f=>!string.Equals(f,output,StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if(ignored.Count>0)progress(1,"Пересчёт статистики по сводному документу: файлы проверяющих не загружаются ("+ignored.Count+"): "+string.Join(", ",ignored.Select(Path.GetFileName))+".");
+                files=new List<string>();
+            }
             var sources=new List<string>();if(exists)sources.Add(output);
             foreach(string f in files.Select(Path.GetFullPath))if(!sources.Any(s=>string.Equals(s,f,StringComparison.OrdinalIgnoreCase)))sources.Add(f);
             var result=Collect(sources,mainName,asOf,progress,token,options,exists,DateTime.Today);result.Files=files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-            if(options.CurrentDateForNewReviews)progress(42,"Текущая дата назначена новым проверенным записям: "+result.DatesAssignedToday+". Даты уже внесённых проверок сохранены.");
+            if(options.CurrentDateForNewReviews&&!options.RecalculateHistory)progress(42,"Текущая дата назначена новым проверенным записям: "+result.DatesAssignedToday+". Даты уже внесённых проверок сохранены.");
             if(result.FilledBoxes.Count>0)progress(43,"Заполнены без замечаний остальные строки: "+result.FilledRows+" в "+result.FilledBoxes.Count+" коробах.");
             if(result.IncompleteBoxes.Count>0)progress(43,"Коробов, проверенных не полностью: "+result.IncompleteBoxes.Count+". Их неотмеченные тома не входят в статистику.");
             string parent=Path.GetDirectoryName(output);Directory.CreateDirectory(parent);
