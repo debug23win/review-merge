@@ -143,4 +143,36 @@ assert report['PdfError'] is None and report['Pdfs'] == [str(indexed), str(work_
 assert any('открыт в другой программе' in line and indexed.name in line for line in report['Log']), report['Log'][-3:]
 (B / 'svod СВОД 2026.10.04 (2).pdf').mkdir(); indexed.unlink(); indexed.mkdir()
 assert build()['Pdfs'][0] == str(B / 'svod СВОД 2026.10.04 (3).pdf')
-print('PDF report tests passed: separate and combined files, names, indexed busy files, four papers, full-width columns, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date')
+
+
+def run(*args):
+    """Exit code and the text of «<книга>.error.txt» (removed) of a --pdf or --batch run."""
+    result = subprocess.run([str(ROOT / 'Свод_проверки.exe'), *map(str, args)], timeout=120)
+    error = Path(str(args[1]) + '.error.txt'); text = error.read_text(encoding='utf-8-sig') if error.exists() else None
+    if text is not None: error.unlink()
+    return result.returncode, text
+
+
+# --pdf with a date other than the report date of the book is refused: the tables show the data of the build date.
+code, text = run('--pdf', output, '2026-10-09')
+assert code == 1 and 'рассчитана на дату свода 04.10.2026' in text and not list(B.glob('*2026.10.09*.pdf')), text
+# Russian messages without a stack trace for a date not in yyyy-MM-dd and for a missing book or reviewer file.
+for args, start in ((('--pdf', output, '04.10.2026'), 'Дата «04.10.2026» не в формате'), (('--pdf', B / 'нет.xlsx', '2026-10-04'), 'Не найден файл книги'),
+                    (('--batch', output, '04.10.2026', MAIN, output), 'Дата «04.10.2026» не в формате'), (('--batch', output, '2026-10-04', MAIN, output, B / 'нет.xlsx'), 'Не найден файл проверяющего')):
+    code, text = run(*args)
+    assert code == 1 and text.startswith(start) and ' at ' not in text, (args, text)
+# A failed PDF leaves no file: a book without «Итоги работы» writes no «СВОД» PDF either.
+raw = B / 'raw' / 'raw.xlsx'; raw.parent.mkdir(); raw.write_bytes((ROOT / 'tests/fixtures/Анна.xlsx').read_bytes())
+code, text = run('--pdf', raw, '2026-10-04')
+assert code == 1 and 'нет листа «Итоги работы»' in text and not list(raw.parent.glob('*.pdf')), text
+# A name too long for Windows is refused before anything is written, with a Russian message.
+long = B / 'long' / 'long.xlsx'; long.parent.mkdir(); long.write_bytes(output.read_bytes())
+subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(long), '2026-10-04', MAIN, str(long), '--pdf-name-work=' + 'Итоги' * 52], check=True, timeout=120)
+report = json.loads(Path(str(long) + '.run.json').read_text(encoding='utf-8-sig'))
+assert report['Pdfs'] == [] and 'слишком длинное' in report['PdfError'] and not list(long.parent.glob('*.pdf')) and not list(long.parent.glob('*.tmp')), report
+# Characters missing from the font are «�» in the text layer, not copies of the first missing character.
+stress = B / 'stress' / 'stress.xlsx'; stress.parent.mkdir(); w = load_workbook(output); w['СВОД']['A1'] = '李小龍 Ёжик'; w.save(stress)
+code, text = run('--pdf', stress, '2026-10-04')
+first = pdf_pages((stress.parent / 'stress СВОД 2026.10.04.pdf').read_bytes())[0][0][1]
+assert code == 0 and 'Ёжик' in first and '李李' not in first and ('李小龍' in first or '\ufffd\ufffd\ufffd' in first), first[:80]
+print('PDF report tests passed: separate and combined files, names, indexed busy files, four papers, full-width columns, summary and work totals, embedded fonts, italic percentages, brochures and the expanded report date, the report date of --pdf, Russian argument errors, no partial PDF, long names and the text of missing glyphs')

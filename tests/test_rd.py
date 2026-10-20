@@ -285,4 +285,11 @@ wrong = base_file(B / 'Чужая база.xlsx', updated, heading='Статус
 before = Path(based).read_bytes()
 refused = build(based, switches=['--rd-base=' + str(wrong)])
 assert 'error' in refused and 'не совпадает' in refused['error'] and Path(based).read_bytes() == before, refused
-print('RD tests passed: merge by set code, new sets after the data, statuses, notes as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, stage list from the base file')
+# An empty --rd-base= (an unset variable of a script) means no base, as the empty field of the window.
+error = Path(str(based) + '.error.txt'); error.unlink()
+assert 'error' not in build(based, switches=['--rd-base='])
+# --pdf with a date other than the report date of the book («СВОД»!U2) is refused: the tables show the data of the build date.
+result = subprocess.run([str(EXE), '--pdf', str(based), '2026-10-09'], timeout=120)
+assert result.returncode == 1 and 'рассчитана на дату свода 08.10.2026' in error.read_text(encoding='utf-8-sig') and not list(B.glob('С базой* 2026.10.09.pdf')), result
+error.unlink()
+print('RD tests passed: merge by set code, new sets after the data, statuses, notes as a comment or a remark, elements, summary, reviewer totals, statistics, PDF, repeated and file-less builds, growing ranges, moved numbers row, missing stage list, priority by the deadline, stage list from the base file, empty base switch, PDF date check')
