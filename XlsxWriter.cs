@@ -274,7 +274,7 @@ namespace ReviewMerge {
                 }
                 if(changed)Store(path,doc);
             }
-            Store("xl/workbook.xml",book);Store("xl/_rels/workbook.xml.rels",rels);Store("[Content_Types].xml",types);Store("xl/styles.xml",styles);
+            Store("xl/workbook.xml",book);Store("xl/_rels/workbook.xml.rels",rels);Store("[Content_Types].xml",types);CompactStyles();Store("xl/styles.xml",styles);
             progress(90,"Сохранение XLSX с формулами");using(var s=new FileStream(output,FileMode.CreateNew))using(var z=new ZipArchive(s,ZipArchiveMode.Create)){foreach(var item in entries){token.ThrowIfCancellationRequested();var e=z.CreateEntry(item.Key,CompressionLevel.Optimal);using(var stream=e.Open())stream.Write(item.Value,0,item.Value.Length);}}
             result.Boxes=referenceLayout.Completed.Count(e=>e.Value.HasValue&&e.Value.Value<=asOf.Date.ToOADate());
         }

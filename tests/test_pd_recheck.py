@@ -168,7 +168,7 @@ def test_damaged_source():
     assert 'broken.xlsx: не удалось прочитать книгу .xlsx' in report.get('error',''), report
     assert path.read_bytes()==before
     report=run(path,'2026-10-04',BASE/'none.xlsx')
-    assert 'Файл не найден: ' in report.get('error',''), report
+    assert 'Не найден файл проверяющего: ' in report.get('error',''), report
 
 def test_kind_of_volume():
     path=fixture('kind.xlsx',[{3:'Том А фрагмент 1',12:5},{3:'Том А фрагмент 2',11:None,12:5},{3:'Том Б',12:6}])
@@ -329,6 +329,17 @@ def test_old_summary_calendar_and_long_names():
     w=load_workbook(path)
     assert w['Итоги работы'].row_dimensions[4].height>24 and w['СВОД'].row_dimensions[9].height>24
 
+def style_counts(path):
+    with zipfile.ZipFile(path) as z: s=z.read('xl/styles.xml').decode('utf-8')
+    return {t:re.search(r'<%s count="(\d+)"'%t,s).group(1) for t in ('fonts','fills','borders','cellXfs') if re.search(r'<%s count="(\d+)"'%t,s)}
+
+def test_styles_do_not_grow():
+    # Every build adds the styles it needs; identical ones are merged, so a rebuild leaves styles.xml as it was.
+    path=fixture('styles.xml.xlsx',[{13:1},{12:2,21:1}],True)
+    build(path);first=style_counts(path)
+    build(path);build(path)
+    assert style_counts(path)==first, (first,style_counts(path))
+
 if __name__=='__main__':
     path=test_marks()
     test_user_columns()
@@ -352,6 +363,7 @@ if __name__=='__main__':
     test_standalone_iul_remark_types()
     test_box_table_layout_and_user_cells()
     test_old_summary_calendar_and_long_names()
+    test_styles_do_not_grow()
     print('PD recheck passed: resolved zero variants, boolean marks, preserved user columns, repeat merge, numeric format, invalid marks, stable names, dates, CRC, conflicts, recalculation, rows, kinds, column migration, '
-          'raw file names, 300-part volumes, box text, escaped criteria, reference sheet XML, standalone IUL types, box table and old summary days')
+          'raw file names, 300-part volumes, box text, escaped criteria, reference sheet XML, standalone IUL types, box table, old summary days and stable styles')
     print(path)

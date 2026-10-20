@@ -187,7 +187,10 @@ before = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги п�
 again = build(target, boris, vera)
 after = {(n, c.coordinate): c.value for n in (MAIN, 'СВОД', 'Итоги проверки', 'Элементы') for r in load_workbook(target, data_only=True)[n].iter_rows() for c in r}
 assert again['Documents'] == 6 and before == after, [k for k in before if before[k] != after.get(k)][:10]
+styles = lambda: __import__('zipfile').ZipFile(target).read('xl/styles.xml')
+grown = len(styles())
 alone = build(target)
+assert len(styles()) == grown, 'a rebuild must not add styles to styles.xml'
 assert alone['Files'] == 0 and alone['Documents'] == 6 and alone['Boxes'] == 3, alone
 
 # A form with prepared formula rows: the ranges of the formulas, of other sheets and of the validation follow the data down.
@@ -384,7 +387,7 @@ assert 'error' not in filled and filled['ConflictList'] == [] and load_workbook(
 damaged = B / 'Битая база.xlsx'; damaged.write_bytes(b'not a zip file')
 before = Path(based).read_bytes()
 refused = build(based, switches=['--rd-base=' + str(damaged)])
-assert 'error' in refused and 'Файл базы элементов «Битая база.xlsx» повреждён' in refused['error'] and Path(based).read_bytes() == before, refused
+assert 'error' in refused and 'Битая база.xlsx: не удалось прочитать книгу .xlsx' in refused['error'] and Path(based).read_bytes() == before, refused
 # An empty --rd-base= (an unset variable of a script) means no base, as the empty field of the window.
 error = Path(str(based) + '.error.txt'); error.unlink()
 assert 'error' not in build(based, switches=['--rd-base='])
