@@ -282,7 +282,7 @@ def artificial_source(path, empty=False):
 def assert_remarks_row(summary, last):
     """The volumes with remarks are in row 4, right above the «СВОД» table; the table ends at the last row of the sheet."""
     text = str(summary.cell(4, 4).value)
-    assert summary.max_row == last and text.startswith('="Всего томов"&CHAR(10)&"с замечаниями: "'), (last, summary.max_row, text)
+    assert summary.max_row == last and text.startswith('="Всего"&CHAR(10)&"замечаний: "'), (last, summary.max_row, text)
     assert summary.cell(5, 1).value == 'Этап' and summary.cell(8, 1).value == 'Этап 1'
 
 

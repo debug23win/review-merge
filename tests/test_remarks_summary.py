@@ -35,7 +35,7 @@ def rows(path):
 def remarks(path, framed=False):
     """The three values right above the «СВОД» table, two lines each: cached texts, formulas, merges, colors and frames."""
     cached, formulas = load_workbook(path, data_only=True)['СВОД'], load_workbook(path)['СВОД']
-    row = next(r for r in range(1, formulas.max_row + 1) if str(cached.cell(r, 4).value or '').startswith('Всего томов\nс замечаниями'))
+    row = next(r for r in range(1, formulas.max_row + 1) if str(cached.cell(r, 4).value or '').startswith('Всего\nзамечаний'))
     assert all(formulas.cell(row, c).alignment.wrap_text for c in (4, 8, 12)) and '&CHAR(10)&' in formulas.cell(row, 4).value, 'two lines in a cell'
     assert row == 4 and formulas.cell(5, 1).value == 'Этап' and formulas.cell(5, 4).value == 'Всего', 'the boxes are right above the table'
     edges = [getattr(formulas.cell(row, c).border, e).style for c in range(4, 16) for e in ('left', 'right', 'top', 'bottom')]
@@ -69,14 +69,14 @@ assert m['U5'].value == 'Примечание' and m['V5'].value == 'Замеч�
 assert all(m.cell(r, 22).value is None for r in range(7, 15))
 assert m.auto_filter.ref is None or m.auto_filter.ref.split(':')[1].startswith('V')
 # Checked up to 04.10 with remarks: Том 1, Том 2 (both fragments), Том 3 (with its ИУЛ). Том 5 is checked later, Том 6 is not checked.
-assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 0', 'Устраняется томов\nс замечаниями: 3']
+assert remarks(output) == ['Всего\nзамечаний: 3', 'Устранено\nзамечаний: 0', 'Устраняется\nзамечаний: 3']
 
 # Marks typed in the consolidated book: 1 and a date resolve, «нет» and 0 do not; a mark in any part resolves the volume.
 w = load_workbook(output); m = w[MAIN]; r = rows(output)
 m.cell(r['Том 1'], 22, 1); m.cell(r['Том 2_фрагмент1'], 22, datetime(2026, 10, 4)); m.cell(r['Том 2_фрагмент2'], 22, 'нет'); m.cell(r['Том 3'], 22, 0)
 w.save(output)
 build(output)
-assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 2', 'Устраняется томов\nс замечаниями: 1']
+assert remarks(output) == ['Всего\nзамечаний: 3', 'Устранено\nзамечаний: 2', 'Устраняется\nзамечаний: 1']
 m = load_workbook(output)[MAIN]
 assert m.cell(r['Том 2_фрагмент1'], 22).value == datetime(2026, 10, 4) and m.cell(r['Том 2_фрагмент1'], 22).is_date, 'a date stays a date, its cell keeps its format'
 assert m.cell(r['Том 1'], 22).value == 1 and m.cell(r['Том 2_фрагмент2'], 22).value == 'нет'
@@ -91,7 +91,7 @@ build(output, reviewer)
 m = load_workbook(output)[MAIN]
 assert [m.cell(r[name], 22).value for name in ('Том 1', 'Том 2_фрагмент2', 'Том 3', 'Том 3-УЛ')] == [1, 1, 0, 'да']
 assert m.cell(r['Том 5'], 22).value == datetime(2026, 10, 6) and m.cell(r['Том 5'], 22).number_format.lower() == 'dd.mm.yyyy', 'a new date gets the date format'
-assert remarks(output) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 3', 'Устраняется томов\nс замечаниями: 0']
+assert remarks(output) == ['Всего\nзамечаний: 3', 'Устранено\nзамечаний: 3', 'Устраняется\nзамечаний: 0']
 
 # The reference sheet keeps the rule as formulas: a mark per file and a resolved flag per volume.
 reference = load_workbook(output)['Справка по томам']
@@ -103,7 +103,7 @@ assert reference.cell(7, heads['Замечания тома устранены']
 
 # Plain text by default; the option frames the same values.
 build(output, '--remarks-with-borders')
-assert remarks(output, framed=True) == ['Всего томов\nс замечаниями: 3', 'Устранено замечаний\nпо томам: 3', 'Устраняется томов\nс замечаниями: 0']
+assert remarks(output, framed=True) == ['Всего\nзамечаний: 3', 'Устранено\nзамечаний: 3', 'Устраняется\nзамечаний: 0']
 
 # «Итоги работы»: non-zero boxes and volumes of the first table are bold, zeros are not; rules keep it so in Excel.
 work, values = load_workbook(output)['Итоги работы'], load_workbook(output, data_only=True)['Итоги работы']
@@ -131,10 +131,10 @@ assert report['PdfError'] is None and Path(report['Pdf']).exists(), report
 notes = [{3: 'Том 7', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 20: 'выдан ранее'}, {3: 'Том 8', 9: 'Анна', 10: datetime(2026, 10, 2), 12: 1, 13: 1}]
 counted = book(B / 'notes-on.xlsx', notes)
 assert build(counted)['WithIssues'] == 2
-assert remarks(counted)[0] == 'Всего томов\nс замечаниями: 2'
+assert remarks(counted)[0] == 'Всего\nзамечаний: 2'
 comment = book(B / 'notes-off.xlsx', notes)
 assert build(comment, '--notes-not-remarks')['WithIssues'] == 1
-assert remarks(comment)[0] == 'Всего томов\nс замечаниями: 1'
+assert remarks(comment)[0] == 'Всего\nзамечаний: 1'
 types = load_workbook(comment, data_only=True)['Стат. по типам']
 head = next(c for c in range(1, types.max_column + 1) if types.cell(4, c).value == 'Дополнительные текстовые замечания')
 assert all(types.cell(r, head).value in (0, None, '') for r in range(6, types.max_row + 1)), 'no type for a comment'
@@ -153,5 +153,5 @@ assert m['V5'].value == 'Замечания устранены'
 for c in range(1, 23): m.cell(9, c, c)
 w.save(moved)
 assert build(moved)['Documents'] == 2
-assert remarks(moved) == ['Всего томов\nс замечаниями: 2', 'Устранено замечаний\nпо томам: 0', 'Устраняется томов\nс замечаниями: 2']
+assert remarks(moved) == ['Всего\nзамечаний: 2', 'Устранено\nзамечаний: 0', 'Устраняется\nзамечаний: 2']
 print('Remarks summary tests passed: resolved column, merge from files, a mark in any part resolves the volume, two-line values above the summary table with or without frames, formulas, bold non-zero work totals and unmerged title, notes as a remark or a comment, moved numbers row not resolved')

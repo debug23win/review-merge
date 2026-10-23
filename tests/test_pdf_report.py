@@ -101,7 +101,7 @@ assert [box for box, _ in pages + work_pages] == ['0 0 595 842'] * 2, 'A4 portra
 first, second = pages[0][1], work_pages[0][1]
 assert 'СВОДНАЯ ТАБЛИЦА ПО РЕЗУЛЬТАТАМ ПРОВЕРКИ ДОКУМЕНТАЦИИ' in first and 'Проверено за сутки' in first and '04.10.2026' in first, first[:300]
 assert 'ИТОГАМ РАБОТЫ' not in first and 'Альтернативное' not in first
-assert first.index('Всего томов с замечаниями:') < first.index('Проверено за сутки'), 'the volumes with remarks are printed above the table'
+assert first.index('Всего замечаний:') < first.index('Проверено за сутки'), 'the volumes with remarks are printed above the table'
 assert 'Анна' in first and 'Борис' in first, 'reviewers of the expanded report date are printed'
 assert 'СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ' in second and 'Анна' in second and 'Борис' in second and 'ВСЕГО' in second, second[:300]
 assert 'Альтернативное' not in second, 'Only the first table of «Итоги работы» is on the second page'
