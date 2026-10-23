@@ -179,7 +179,7 @@ namespace ReviewMerge {
             // Each is two lines of plain text over its block (Всего, Проверено, Осталось проверить), framed when the option says so.
             {double cut=asOf.ToOADate();var remarked=l.Volumes.Where(v=>v.IsVolume&&v.Issue==1&&v.Date.HasValue&&v.Date.Value>0&&v.Date.Value<=cut).ToList();int resolved=remarked.Count(v=>v.Resolved==1);
                 string all="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1)",done="COUNTIFS("+vd+",\">0\","+vd+",\"<=\"&"+cutoff+","+isv+",1,"+vi+",1,"+range(50,vl)+",1)";
-                var boxes=new[]{Tuple.Create(4,"Всего томов\nс замечаниями: ",gold,remarked.Count,all),Tuple.Create(8,"Устранено замечаний\nпо томам: ",green,resolved,done),Tuple.Create(12,"Устраняется томов\nс замечаниями: ",red,remarked.Count-resolved,all+"-"+done)};
+                var boxes=new[]{Tuple.Create(4,"Всего\nзамечаний: ",gold,remarked.Count,all),Tuple.Create(8,"Устранено\nзамечаний: ",green,resolved,done),Tuple.Create(12,"Устраняется\nзамечаний: ",red,remarked.Count-resolved,all+"-"+done)};
                 int line=top-1;
                 foreach(var b in boxes){int st=RecreatedStyle(b.Item3,true);if(!options.RemarksWithBorders)st=ReportStyle(st,"none","none","none","none");
                     string[] parts=b.Item2.Split('\n');
