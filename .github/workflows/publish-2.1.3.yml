@@ -1,0 +1,34 @@
+name: Publish v2.1.3
+on:
+  push:
+    branches: [release/v2.1.3]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/v2.1.3
+          persist-credentials: false
+      - name: Build the verified v2.1.3 tag
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne 'f3a9ad3a8592c357fb886e94e9e1087dfe934a1f') {
+            throw 'Unexpected release source commit'
+          }
+          ./build.ps1 -Version 2.1.3
+      - name: Publish ZIP and checksum
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $result = & gh release create v2.1.3 dist/review-merge-windows.zip dist/review-merge-windows.zip.sha256 --verify-tag --repo $env:GITHUB_REPOSITORY --title v2.1.3 --notes-file RELEASE_NOTES.md 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $result | ForEach-Object { Write-Host "::error::$($_.ToString().Replace('%','%25').Replace([string][char]13,'%0D').Replace([string][char]10,'%0A'))" }
+            exit 1
+          }
+          $result
