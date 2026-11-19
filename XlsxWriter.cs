@@ -183,7 +183,7 @@ namespace ReviewMerge {
             var filter=main.Root.Element(N+"autoFilter");
             if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(Math.Max(mainColumns.Count,resolvedColumn),Column(right)))+last);}
             Store(mainPath,main);progress(65,"Данные проверки объединены. Статистика рассчитывается на листе «Свод»");
-            RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags,reportFileName??output,firstFile);
+            RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags,reportFileName??output,firstFile,token);
             if(!options.KeepLegacyReport)progress(82,"Пересозданы 4 отчётных листа: СВОД, Стат. по типам, Стат. по зам., Итоги работы.");
             Finish(output,result,asOf,progress,token);
         }

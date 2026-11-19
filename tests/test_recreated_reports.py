@@ -1,7 +1,7 @@
 """Rebuilt report layouts, reviewer histories and unique global totals; artificial data only."""
 from pathlib import Path
 from datetime import datetime
-import hashlib, subprocess, uuid, math, posixpath, zipfile
+import hashlib, os, shutil, subprocess, uuid, math, posixpath, zipfile
 import xml.etree.ElementTree as ET
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, Border, Side
@@ -372,17 +372,17 @@ def test_reviewer_histories_and_global_totals():
             assert_cached(book['Стат. по зам.'], cached['Стат. по зам.'], row, column, 0)
         for column in range(3, 23, 2):
             assert_cached(book['Стат. по типам'], cached['Стат. по типам'], row, column, 0)
-    # Expected unique completions: box 11 first counted for Anna on October 1;
-    # its two-part/ИУЛ volume counted once for Boris on October 2. A standalone
+    # Boris checked two files of box 11 and Anna checked one. The box counts
+    # once for Boris on October 2, as does its two-part/ИУЛ volume. A standalone
     # ИУЛ is never a volume. The two excluded dated-file reviewers add boxes
     # to global totals, but have no completed volumes and no personal columns.
     daily = {
-        1: {'Анна': (2, 1)},
-        2: {'Борис': (1, 2)},
+        1: {'Анна': (1, 1)},
+        2: {'Борис': (2, 2)},
         3: {'Анна': (1, 1)},
         4: {},
     }
-    global_daily = {1: (2, 1), 2: (3, 2), 3: (1, 1), 4: (0, 0)}
+    global_daily = {1: (1, 1), 2: (4, 2), 3: (1, 1), 4: (0, 0)}
     cumulative = {name: [0, 0] for name in reviewers}
     global_cumulative = [0, 0]
     assert_remarks_row(summary, 7 + len(dates) * (len(reviewers) + 1))
@@ -458,8 +458,8 @@ def test_reviewer_histories_and_global_totals():
     assert tuple(global_cumulative) == (6, 4)
     assert sum(counts[0] for counts in cumulative.values()) == 4, (
         'Global box count includes the two excluded reviewers; summing displayed columns is wrong')
-    assert tuple(cumulative['Анна']) == (3, 2)
-    assert tuple(cumulative['Борис']) == (1, 2)
+    assert tuple(cumulative['Анна']) == (2, 2)
+    assert tuple(cumulative['Борис']) == (2, 2)
     # Source received totals remain independent of the reviewed global totals.
     assert cached['Справка по томам']['B1'].value == 20
     assert cached['Справка по томам']['B2'].value == 100
@@ -479,6 +479,44 @@ def test_reviewer_histories_and_global_totals():
     past, today = rows[min(rows)], rows[AS_OF]
     assert str(summary.cell(past, 10).value).startswith('=') and str(summary.cell(today, 10).value).startswith('='), (summary.cell(past, 10).value, summary.cell(today, 10).value)
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+
+
+def test_box_assignment_override_and_cancel():
+    target = B / 'box-assignment.xlsx'
+    artificial_source(target)
+    compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+    if not compiler.exists():
+        compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework/v4.0.30319/csc.exe'
+    app = B / 'Свод_проверки.exe'
+    shutil.copy2(ROOT / app.name, app)
+    harness = B / 'BoxAssignmentsTest.exe'
+    subprocess.run([str(compiler), '/nologo', '/codepage:65001', '/out:' + str(harness),
+                    '/r:' + str(app), str(ROOT / 'tests/BoxAssignmentsTest.cs')], check=True, timeout=60)
+
+    def choose(mode):
+        subprocess.run([str(harness), str(target), mode], check=True, timeout=120)
+
+    def check(owner, day, anna, boris):
+        with zipfile.ZipFile(target) as archive:
+            assert archive.testzip() is None
+        book = load_workbook(target, read_only=True, data_only=True)
+        reference = book['Справка по томам']
+        box = next(row for row in reference.iter_rows(min_row=48, max_col=8, values_only=True) if row[:2] == ('ПД', 11))
+        assert (box[5], box[7]) == (datetime(2026, 10, day), owner)
+        work = book['Итоги работы']
+        columns = list(next(work.iter_rows(min_row=4, max_row=4, values_only=True)))
+        totals = next(work.iter_rows(min_row=6, max_row=6, values_only=True))
+        assert (totals[columns.index('Анна')], totals[columns.index('Борис')], totals[columns.index('ВСЕГО')]) == (anna, boris, 6)
+        book.close()
+
+    choose('override')
+    check('Анна', 1, 3, 1)
+    choose('recommendation')
+    check('Борис', 2, 2, 2)
+    before = target.read_bytes()
+    backups = set(B.glob(target.name + '.backup-*'))
+    choose('cancel')
+    assert target.read_bytes() == before and set(B.glob(target.name + '.backup-*')) == backups
 
 
 def test_no_reviewers():
@@ -531,7 +569,7 @@ def test_same_surname_reference_reviewer():
     assert 'Иванов' not in headers and idle not in headers
     assert_report_reviewers(book, reviewers, EXCLUDED_REVIEWERS | {idle, 'Иванов'})
     assert cached['Справка по томам']['A12'].value == idle
-    for name, expected in ((active, (3, 2)),):
+    for name, expected in ((active, (2, 2)),):
         for kind in range(2):
             formula = assert_cached(book['Итоги работы'], cached['Итоги работы'],
                                     6, headers[name] + kind, expected[kind])
@@ -629,6 +667,7 @@ def test_only_unqualified_reviewers():
 if __name__ == '__main__':
     test_layout_migration()
     test_reviewer_histories_and_global_totals()
+    test_box_assignment_override_and_cancel()
     test_no_reviewers()
     test_same_surname_reference_reviewer()
     test_lifetime_reviewers_do_not_depend_on_as_of()

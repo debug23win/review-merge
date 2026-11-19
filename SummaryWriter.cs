@@ -118,7 +118,7 @@ namespace ReviewMerge {
             if(end>1)merges.Add(new XElement(N+"mergeCell",new XAttribute("ref","A"+row+":"+MergeEngine.ExcelColumn(end)+row)));
             merges.SetAttributeValue("count",merges.Elements().Count());
         }
-        void WriteCurrentSummary(string name,MergeResult result,DateTime asOf,List<int> rowNumbers,List<List<string>> keys,List<double?> dates,List<int> issues,List<int> checked_,string reportFileName,string firstFile) {
+        void WriteCurrentSummary(string name,MergeResult result,DateTime asOf,List<int> rowNumbers,List<List<string>> keys,List<double?> dates,List<int> issues,List<int> checked_,string reportFileName,string firstFile,System.Threading.CancellationToken token) {
             string oldPath=PathFor("Свод");XDocument previous=oldPath==null?null:Xml(oldPath);
             int? stage=ReportStage(previous,reportFileName,firstFile);
             bool reference=previous!=null&&XlsxReader.Normal(Value(At(previous,7,1))).Contains("ПОЛУЧЕНО КОРОБ")&&XlsxReader.Normal(Value(At(previous,8,1))).Contains("ТОМОВ ПО АКТУ");
@@ -138,6 +138,7 @@ namespace ReviewMerge {
                 .Select(c=>Column((string)c.Attribute("r"))).Where(c=>oldHelper==0||c<oldHelper).DefaultIfEmpty(0).Max();
             // Calculation columns start to the right of every date column and every filled cell of the summary.
             referenceLayout=PrepareReference(result,dates,issues,asOf,Math.Max(end,templateEnd)+3);
+            ResolveBoxAssignments(result,asOf,token);
             int h=referenceLayout.Helper,last=result.Rows.Count+6,vh=h+12;
             var g=new Grid();var defaults=SummaryStyles();
             int label=reference?StyleAt(previous,7,1,defaults[0]):defaults[0],number=reference?StyleAt(previous,7,2,defaults[1]):defaults[1];

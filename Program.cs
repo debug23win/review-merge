@@ -44,7 +44,7 @@ namespace ReviewMerge {
                     var logs = new List<string>();
                     var result = MergeEngine.Run(sources, args[1], args[3], date, (n,s) => logs.Add(n+"%: "+s), CancellationToken.None, options);
                     var report = new { result.Files, result.Documents, result.Reviewed, result.WithIssues, result.Boxes, result.Elements, result.Rd, result.DatesAssignedToday, result.FilledRows, Conflicts=result.Conflicts.Count, Problems=result.Problems.Count, ProblemList=result.Problems.Select(p=>Path.GetFileName(p.File)+", строка "+p.Row+": "+p.Detail).ToList(), ConflictList=result.Conflicts.Select(c=>c.Document+" | "+c.Field+" | "+c.Details.Replace("\n"," / ")).ToList(),
-                        IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.VolumeMerges, result.Output, result.Pdf, result.Pdfs, result.PdfError, Log=logs };
+                        IncompleteBoxes=result.IncompleteBoxes.Select(v=>v.ToString()).ToList(), FilledBoxes=result.FilledBoxes.Select(v=>v.ToString()).ToList(), result.PeopleMerges, result.ConvertedMarks, result.VolumeMerges, result.BoxAssignments, result.Output, result.Pdf, result.Pdfs, result.PdfError, Log=logs };
                     File.WriteAllText(args[1]+".run.json", new JavaScriptSerializer().Serialize(report), new UTF8Encoding(false));
                     return 0;
                 }
@@ -293,7 +293,7 @@ namespace ReviewMerge {
             if(rd&&CleanPath(basePath.Text)!=""){try{rdBase=Path.GetFullPath(CleanPath(basePath.Text));}catch(Exception ex){MessageBox.Show(this,ex.Message,Text);return;}if(!File.Exists(rdBase)){MessageBox.Show(this,"Не найден файл базы элементов:\n"+rdBase+"\n\nУкажите файл этапа с листом «База» или очистите поле.",Text);return;}}
             if(history&&MessageBox.Show(this,rd?"Пересчитать «СВОД», «Итоги проверки», «Статистику» и «Элементы» по данным сводной книги РД?\n\nФайлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.":"Пересчитать «СВОД», статистику и «Итоги работы» по данным сводного документа?\n\nФайлы проверяющих из списка не загружаются. Перед записью создаётся резервная копия.",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
             var selected=history?new List<string>():paths.ToList();string main=sheetName.Text.Trim();DateTime date=asOf.Value.Date;
-            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ConvertMark=(mark,count)=>AskConvertMark(mark,count,rd),Pdf=new PdfSettings{Paper=(PdfPaper)paper.SelectedIndex,Combined=pdfMode.SelectedIndex==1,SummaryName=summaryName.Text,WorkName=workName.Text,CombinedName=combinedName.Text,WorkSheet=rd?RdEngine.RdWork:PdfSettings.PdWork},RemarksWithBorders=framedRemarks.Checked,RecalculateHistory=history,Rd=rd,NotesAsRemarks=notesRemarks.Checked,RdBase=rdBase};
+            var options=new MergeOptions{CurrentDateForNewReviews=currentDate.Checked,MatchSurnames=matchSurnames.Checked,SamePerson=AskSamePerson,SavedSamePerson=(raw,known)=>UserSettings.GetAnswer("SamePerson",UserSettings.PairKey(raw,known)),FillIncomplete=AskFillIncomplete,ChooseBoxReviewer=AskBoxReviewer,ConvertMark=(mark,count)=>AskConvertMark(mark,count,rd),Pdf=new PdfSettings{Paper=(PdfPaper)paper.SelectedIndex,Combined=pdfMode.SelectedIndex==1,SummaryName=summaryName.Text,WorkName=workName.Text,CombinedName=combinedName.Text,WorkSheet=rd?RdEngine.RdWork:PdfSettings.PdWork},RemarksWithBorders=framedRemarks.Checked,RecalculateHistory=history,Rd=rd,NotesAsRemarks=notesRemarks.Checked,RdBase=rdBase};
             cancellation=new CancellationTokenSource();Busy(true);progress.Value=0;conflicts.DataSource=null;Append(history?(rd?"Пересчёт отчётов по сводной книге РД.":"Пересчёт статистики всех дней по сводному документу."):"Начата сборка "+selected.Count+" файлов"+(rd?" (РД).":"."));
             var worker=new Thread(()=> {
                 try {
@@ -302,6 +302,7 @@ namespace ReviewMerge {
                             :"Документов: "+result.Documents+"   Проверено: "+result.Reviewed+"   Коробов проверено не полностью: "+result.IncompleteBoxes.Count+"   Конфликтов: "+result.Conflicts.Count+"   Проблем данных: "+result.Problems.Count;
                         Append("Дополнен сводный документ: "+result.Output);foreach(string pdf in result.Pdfs)Append("Создан PDF: "+pdf);foreach(var merge in result.VolumeMerges)Append("Один том по номеру тома "+merge);foreach(var merge in result.PeopleMerges)Append("Один проверяющий: "+merge);foreach(var mark in result.ConvertedMarks)Append("Отметка переведена в 1: "+mark);
                         foreach(var v in result.FilledBoxes)Append("Заполнены без замечаний остальные строки. "+v);foreach(var v in result.IncompleteBoxes)Append("Проверено не полностью, неотмеченные тома не входят в статистику. "+v);
+                        foreach(string assignment in result.BoxAssignments)Append(assignment);
                         foreach(var problem in result.Problems)Append(Path.GetFileName(problem.File)+", строка "+problem.Row+": "+problem.Detail);Busy(false);cancellation.Dispose();cancellation=null;});
                 } catch(OperationCanceledException) {Ui(()=>{Append("Сборка отменена. Итоговый файл не заменён.");Busy(false);cancellation.Dispose();cancellation=null;});}
                 catch(Exception ex) {Ui(()=>{Append("Ошибка: "+ex.Message);Busy(false);cancellation.Dispose();cancellation=null;MessageBox.Show(this,ex.Message,"Не удалось собрать свод",MessageBoxButtons.OK,MessageBoxIcon.Error);});}
@@ -340,8 +341,46 @@ namespace ReviewMerge {
             if(cancel)throw new OperationCanceledException();
             return chosen;
         }
+        string AskBoxReviewer(BoxAssignmentConflict conflict) {
+            string chosen=null;
+            Invoke((Action)(()=>{
+                using(var dialog=new BoxAssignmentDialog(conflict)) {
+                    if(dialog.ShowDialog(this)==DialogResult.OK)chosen=dialog.SelectedReviewer;
+                }
+            }));
+            return chosen;
+        }
         void UpdateRule(){rule.Text="Правило: сохранять все отметки «1» и все разные тексты замечаний"+(rdMode.Checked?"; комплект — шифр РД и «Изм.».\n":".\n")+(currentDate.Checked?"Новые проверки — с текущей датой; даты уже внесённых проверок сохраняются.":"Проверяющий и дата — из последней датированной проверки; при одинаковой дате — из последнего файла.")+"\nДанные дописываются в выбранный сводный документ. Статистика — на вкладке «"+(rdMode.Checked?"СВОД":"Свод")+"».";}
         void CancelBuild() {if(cancellation!=null) {cancellation.Cancel();cancel.Enabled=false;Append("Запрошена отмена.");}}
+    }
+    sealed class BoxAssignmentDialog : Form {
+        readonly IList<BoxReviewer> reviewers;
+        readonly ListBox list=new ListBox();
+
+        public BoxAssignmentDialog(BoxAssignmentConflict conflict) {
+            reviewers=conflict.Reviewers;
+            Text="Закрепить короб "+conflict.Box;Font=new Font("Segoe UI",10);AutoScaleMode=AutoScaleMode.Dpi;
+            ClientSize=new Size(540,300);MinimumSize=new Size(430,260);StartPosition=FormStartPosition.CenterParent;
+            ShowInTaskbar=false;MinimizeBox=false;
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,77));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,46));
+            string guidance=conflict.Recommended==null?"У лидеров поровну файлов. Выберите проверяющего.":"Предложен проверяющий с наибольшим числом файлов. Можно выбрать другого.";
+            layout.Controls.Add(new Label {Dock=DockStyle.Fill,Text="Короб "+conflict.Box+" проверяли несколько человек. Закрепите его за одним для статистики.\n"+guidance},0,0);
+            list.Dock=DockStyle.Fill;list.IntegralHeight=false;list.HorizontalScrollbar=true;
+            foreach(var reviewer in reviewers)list.Items.Add(reviewer.Name+" — файлов: "+reviewer.Files);
+            layout.Controls.Add(list,0,1);
+            var buttons=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Padding=new Padding(0,6,0,0)};
+            var assign=new Button {Text="Закрепить",Width=130,Height=32,DialogResult=DialogResult.OK};
+            var stop=new Button {Text="Отменить сборку",Width=155,Height=32,DialogResult=DialogResult.Cancel};
+            if(conflict.Recommended!=null)list.SelectedIndex=0;
+            assign.Enabled=list.SelectedIndex>=0;
+            list.SelectedIndexChanged+=(s,e)=>assign.Enabled=list.SelectedIndex>=0;
+            buttons.Controls.AddRange(new Control[] {assign,stop});layout.Controls.Add(buttons,0,2);
+            Controls.Add(layout);AcceptButton=assign;CancelButton=stop;
+        }
+        public string SelectedReviewer {get{return list.SelectedIndex<0?null:reviewers[list.SelectedIndex].Name;}}
     }
     sealed class IncompleteBoxesDialog : Form {
         readonly CheckedListBox list = new CheckedListBox();

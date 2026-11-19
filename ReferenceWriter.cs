@@ -8,7 +8,7 @@ using System.Xml.Linq;
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
         const string CalculationMarker="ReviewMerge.FirstDates.v3";
-        const int HelperWidth=51,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
+        const int AssignedBoxReviewer=51,AssignedBoxDate=52,HelperWidth=53,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
         sealed class VolumeRecord {public string List="",Who,Raw="",Kind="";public List<string> Boxes=new List<string>();public double? Date;public int Issue,Resolved;public bool IsVolume=true;}
         // One day of the reference sheet: box slots, the "boxes / volumes" total and the note column. A spare day gets a date when a new date appears in the main sheet.
         sealed class DayBlock {public double? Date;public int Start,Slots;public int Total{get{return Start+Slots;}}public int Note{get{return Start+Slots+1;}}}
@@ -38,6 +38,31 @@ namespace ReviewMerge {
             public readonly Dictionary<string,double?> Completed=new Dictionary<string,double?>();
             public readonly Dictionary<string,string> CompletedBy=new Dictionary<string,string>();
             public readonly List<VolumeRecord> BoxFiles=new List<VolumeRecord>();
+            public readonly Dictionary<string,BoxReviewer> AssignedBoxes=new Dictionary<string,BoxReviewer>(StringComparer.OrdinalIgnoreCase);
+        }
+        void ResolveBoxAssignments(MergeResult result,DateTime asOf,System.Threading.CancellationToken token) {
+            var layout=referenceLayout;
+            double cutoff=asOf.ToOADate();
+            var checkedByBox=layout.BoxFiles.Where(file=>file.Date.HasValue&&file.Date.Value<=cutoff&&file.Who!="")
+                .SelectMany(file=>file.Boxes.Select(box=>new {Box=box,File=file})).ToLookup(row=>row.Box,row=>row.File,StringComparer.OrdinalIgnoreCase);
+            foreach(string key in layout.Boxes) {
+                token.ThrowIfCancellationRequested();
+                var reviewers=checkedByBox[key].GroupBy(file=>file.Who,StringComparer.OrdinalIgnoreCase)
+                    .Select(g=>new BoxReviewer(g.Key,g.Count(),g.Min(file=>file.Date.Value)))
+                    .OrderByDescending(who=>who.Files).ThenBy(who=>who.FirstDate).ThenBy(who=>who.Name,StringComparer.OrdinalIgnoreCase).ToList();
+                if(reviewers.Count<2)continue;
+                int bar=key.IndexOf('|');
+                string box=key.Substring(0,bar)+" №"+key.Substring(bar+1);
+                var conflict=new BoxAssignmentConflict(box,reviewers);
+                string chosen=options.ChooseBoxReviewer==null?reviewers[0].Name:options.ChooseBoxReviewer(conflict);
+                token.ThrowIfCancellationRequested();
+                if(chosen==null)throw new OperationCanceledException();
+                var reviewer=reviewers.FirstOrDefault(who=>string.Equals(who.Name,chosen,StringComparison.OrdinalIgnoreCase));
+                if(reviewer==null)throw new InvalidOperationException("Выбранный проверяющий не проверял файлы короба "+box+".");
+                layout.AssignedBoxes[key]=reviewer;
+                result.BoxAssignments.Add("Короб "+box+" закреплён за «"+reviewer.Name+"». Проверено файлов: "+
+                    string.Join(", ",reviewers.Select(who=>who.Name+" — "+who.Files))+".");
+            }
         }
         ReferenceLayout referenceLayout;
         int HelperStart(XDocument doc) {
@@ -257,12 +282,17 @@ namespace ReviewMerge {
             int title=l.ManifestStart-2,header=l.ManifestStart-1;g.Set(title,1,"УЧЁТ ПРОВЕРЕННЫХ КОРОБОВ",headStyle);
             string[] headers={"Вид","Короб","Томов в реестре","Проверено томов","Всего томов по описи","Дата проверки короба","Состояние","Проверил короб"};for(int c=0;c<headers.Length;c++)g.Set(header,c+1,headers[c],headStyle);g.Heights[header]=75;
             var completion=l.Completed;var completedBy=l.CompletedBy;int fileLast=l.BoxFiles.Count+6;string fileDates=LocalRange(h+4,7,fileLast),fileKeys=LocalRange(h,7,fileLast),fileOwners=LocalRange(h+9,7,fileLast);
+            if(l.AssignedBoxes.Count>0) {
+                g.Set(6,h+AssignedBoxReviewer,"Назначенный проверяющий короба",bodyStyle);
+                g.Set(6,h+AssignedBoxDate,"Первая проверка короба назначенным проверяющим",bodyStyle);
+            }
             for(int i=0;i<=l.ManifestEnd-l.ManifestStart;i++) {
                 int row=l.ManifestStart+i;bool spare=i>=l.Boxes.Count;string key=spare?"":l.Boxes[i],a="$A"+row;
                 // A file belongs to every box of its list: ";ПД|45;ПД|46;" contains ";ПД|45;".
                 string k=a+"&\"|\"&TEXT($B"+row+",\"0\")",inList="ISNUMBER(SEARCH(\";\"&"+k+"&\";\","+fileKeys+"))",volumeCriteria="\"*;\"&"+k+"&\";*\"";
                 Func<string,string> live=f=>spare?"IF("+a+"=\"\",\"\","+f+")":f;
                 object volumes="",checkedVolumes="",date="",state="",owner="";
+                BoxReviewer assigned=null;
                 if(spare) {
                     // A box typed in the main sheet after the build: the next number that the table does not have yet.
                     string found=MergeEngine.ExcelColumn(h+29)+row;
@@ -272,14 +302,30 @@ namespace ReviewMerge {
                     g.Set(row,5,null,StyleAt(old,row,l.ManifestColumn,intStyle));
                 } else {
                     var members=l.Volumes.Where(v=>v.IsVolume&&v.Boxes.Contains(key)).ToList();object expected;l.Expected.TryGetValue(key,out expected);
-                    var checkedFiles=l.BoxFiles.Where(v=>v.Boxes.Contains(key)&&v.Date.HasValue&&v.Who!="").ToList();double? earliest=checkedFiles.Count>0?(double?)checkedFiles.Min(v=>v.Date.Value):null;completion[key]=earliest;completedBy[key]=earliest.HasValue?checkedFiles.First(v=>v.Date==earliest).Who:"";
+                    var checkedFiles=l.BoxFiles.Where(v=>v.Boxes.Contains(key)&&v.Date.HasValue&&v.Who!="").ToList();
+                    l.AssignedBoxes.TryGetValue(key,out assigned);
+                    double? earliest=assigned!=null?assigned.FirstDate:checkedFiles.Count>0?(double?)checkedFiles.Min(v=>v.Date.Value):null;
+                    completion[key]=earliest;
+                    completedBy[key]=assigned!=null?assigned.Name:earliest.HasValue?checkedFiles.First(v=>v.Date==earliest).Who:"";
                     g.Set(row,1,key.Split('|')[0],bodyStyle);g.Set(row,2,(double)BoxNumber(key),intStyle);g.Set(row,5,expected,StyleAt(old,row,l.ManifestColumn,intStyle));g.Set(row,h+44,";"+key+";",bodyStyle,"\";\"&"+k+"&\";\"");
                     volumes=members.Count;checkedVolumes=members.Count(v=>v.Date.HasValue);date=earliest.HasValue?(object)earliest.Value:"";state=earliest.HasValue?"Проверен":"Нет даты и фамилии";owner=completedBy[key];
                 }
                 string rawOwner="INDEX("+fileOwners+",MATCH(1,INDEX("+inList+"*("+fileDates+"=F"+row+"),0),0))";
+                string dateFormula="IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/"+inList+"/("+fileDates+">0),1),\"\")";
+                string ownerFormula="IF(F"+row+"=\"\",\"\",IFERROR(VLOOKUP("+Exact(rawOwner)+","+NamesRange(h)+",2,FALSE),IFERROR("+rawOwner+",\"\")))";
+                if(assigned!=null) {
+                    string chosen=MergeEngine.ExcelColumn(h+AssignedBoxReviewer)+row,firstAssigned=MergeEngine.ExcelColumn(h+AssignedBoxDate)+row;
+                    string statName="IFERROR(VLOOKUP("+Exact(chosen)+","+NamesRange(h)+",3,FALSE),"+chosen+")";
+                    string match=LocalRange(h+1,7,fileLast)+"="+statName;
+                    string firstDate="IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/("+inList+"*("+match+")*("+fileDates+">0)),1),\"\")";
+                    g.Set(row,h+AssignedBoxReviewer,assigned.Name,bodyStyle);
+                    g.Set(row,h+AssignedBoxDate,assigned.FirstDate,dateStyle,firstDate);
+                    dateFormula="IF(ISNUMBER("+firstAssigned+"),"+firstAssigned+","+dateFormula+")";
+                    ownerFormula="IF(ISNUMBER("+firstAssigned+"),"+chosen+","+ownerFormula+")";
+                }
                 g.Set(row,3,volumes,intStyle,live("COUNTIFS("+keys+","+volumeCriteria+isv+")"));g.Set(row,4,checkedVolumes,intStyle,live("COUNTIFS("+keys+","+volumeCriteria+","+dates+",\">0\""+isv+")"));
-                g.Set(row,6,date,dateStyle,live("IFERROR(_xlfn.AGGREGATE(15,6,"+fileDates+"/"+inList+"/("+fileDates+">0),1),\"\")"));g.Set(row,7,state,noteStyle,live("IF(F"+row+"<>\"\",\"Проверен\",\"Нет даты и фамилии\")"));
-                g.Set(row,8,owner,bodyStyle,live("IF(F"+row+"=\"\",\"\",IFERROR(VLOOKUP("+Exact(rawOwner)+","+NamesRange(h)+",2,FALSE),IFERROR("+rawOwner+",\"\")))"));g.Heights[row]=36;
+                g.Set(row,6,date,dateStyle,live(dateFormula));g.Set(row,7,state,noteStyle,live("IF(F"+row+"<>\"\",\"Проверен\",\"Нет даты и фамилии\")"));
+                g.Set(row,8,owner,bodyStyle,live(ownerFormula));g.Heights[row]=36;
             }
             // Boxes of the register: a row of the table counts while a file of the main sheet still names its box; a spare row shows a new box.
             string boxKeys=LocalRange(h+44,l.ManifestStart,l.BoxEnd),spareNumbers=LocalRange(2,l.BoxEnd+1,l.ManifestEnd);

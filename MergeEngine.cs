@@ -40,6 +40,24 @@ namespace ReviewMerge {
                 " (" + Reviewer + ", " + DateTime.FromOADate(Date).ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) + ")";
         }
     }
+    public sealed class BoxReviewer {
+        public readonly string Name;
+        public readonly int Files;
+        internal readonly double FirstDate;
+
+        internal BoxReviewer(string name,int files,double firstDate) {
+            Name=name;Files=files;FirstDate=firstDate;
+        }
+    }
+    public sealed class BoxAssignmentConflict {
+        public readonly string Box;
+        public readonly IList<BoxReviewer> Reviewers;
+        public BoxReviewer Recommended {get{return Reviewers[0].Files>Reviewers[1].Files?Reviewers[0]:null;}}
+
+        internal BoxAssignmentConflict(string box,List<BoxReviewer> reviewers) {
+            Box=box;Reviewers=reviewers.AsReadOnly();
+        }
+    }
     public sealed class MergeOptions {
         public bool CurrentDateForNewReviews, MatchSurnames;
         // Working documentation: the RD check sheet («Проверка комплектов») instead of the PD register.
@@ -65,6 +83,8 @@ namespace ReviewMerge {
         public Func<string, int, bool> ConvertMark;
         // Receives the partly checked boxes and returns those whose remaining rows are filled without remarks.
         public Func<IList<IncompleteBox>, IList<IncompleteBox>> FillIncomplete;
+        // Return the reviewer of a shared box, or null to cancel. Batch mode takes the first ranked candidate.
+        public Func<BoxAssignmentConflict, string> ChooseBoxReviewer;
     }
     public sealed class MergeResult {
         public int Files, Documents, Reviewed, WithIssues, Boxes, DatesAssignedToday, FilledRows;
@@ -89,6 +109,7 @@ namespace ReviewMerge {
         public readonly List<IncompleteBox> FilledBoxes = new List<IncompleteBox>();
         public readonly List<string> PeopleMerges = new List<string>();
         public readonly List<string> ConvertedMarks = new List<string>();
+        public readonly List<string> BoxAssignments = new List<string>();
         public int StartRow, HeaderRow;
         public RegisterColumns Columns;
         // Rows of column numbers among the data of the consolidated book; a date written into one by an earlier build is put back.

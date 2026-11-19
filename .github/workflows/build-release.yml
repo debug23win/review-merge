@@ -22,7 +22,7 @@ jobs:
       - name: Build portable application
         shell: pwsh
         run: |
-          $version = '2.1.3'
+          $version = '2.1.4'
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF_NAME.TrimStart('v') }
           ./build.ps1 -Version $version
       - name: Test merging and update validation
@@ -60,17 +60,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $assets = @('dist/review-merge-windows.zip', 'dist/review-merge-windows.zip.sha256')
           $tag = $env:GITHUB_REF_NAME
+          if ($env:GITHUB_EVENT_NAME -eq 'release') {
+            gh release upload $tag @assets --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
+            exit 0
+          }
           if ($env:GITHUB_REF -eq 'refs/heads/main') {
             $appVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $PWD 'Свод_проверки.exe')).FileVersion
             $tag = 'v' + ([version]$appVersion).ToString(3)
+            gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            $target = @('--target', $env:GITHUB_SHA)
+          } else {
+            $target = @('--verify-tag')
           }
-          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
-          $exists = $LASTEXITCODE -eq 0
-          if ($exists -and $env:GITHUB_REF -eq 'refs/heads/main') { exit 0 }
-          if (!$exists) {
-            gh release create $tag --target $env:GITHUB_SHA --repo $env:GITHUB_REPOSITORY --title $tag --notes-file RELEASE_NOTES.md
-            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
-          }
-          gh release upload $tag dist/review-merge-windows.zip dist/review-merge-windows.zip.sha256 --clobber --repo $env:GITHUB_REPOSITORY
-          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
+          gh release create $tag @assets @target --repo $env:GITHUB_REPOSITORY --title $tag --notes-file RELEASE_NOTES.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }

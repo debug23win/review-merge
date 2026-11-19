@@ -12,11 +12,27 @@ class UiTest {
     static MainForm f;
     static T Get<T>(string name){return (T)typeof(MainForm).GetField(name,BindingFlags.NonPublic|BindingFlags.Instance).GetValue(f);}
     static void Pump(){for(int i=0;i<20;i++){Application.DoEvents();System.Threading.Thread.Sleep(25);}}
+    static void CheckBoxChoice(List<string> errors,bool tie) {
+        const BindingFlags constructor=BindingFlags.Instance|BindingFlags.NonPublic;
+        var reviewers=new List<BoxReviewer>();
+        reviewers.Add((BoxReviewer)Activator.CreateInstance(typeof(BoxReviewer),constructor,null,new object[]{"Анна",2,46345.0},null));
+        reviewers.Add((BoxReviewer)Activator.CreateInstance(typeof(BoxReviewer),constructor,null,new object[]{"Борис",tie?2:1,46345.0},null));
+        var conflict=(BoxAssignmentConflict)Activator.CreateInstance(typeof(BoxAssignmentConflict),constructor,null,new object[]{"ПД №1",reviewers},null);
+        Type type=typeof(MainForm).Assembly.GetType("ReviewMerge.BoxAssignmentDialog",true);
+        using(var dialog=(Form)Activator.CreateInstance(type,new object[]{conflict})) {
+            var boxes=(ListBox)type.GetField("list",constructor).GetValue(dialog);
+            var assign=(Button)dialog.AcceptButton;
+            if(boxes.SelectedIndex!=(tie?-1:0)||assign.Enabled==tie)errors.Add("incorrect automatic box selection");
+            boxes.SelectedIndex=1;
+            if(!assign.Enabled||(string)type.GetProperty("SelectedReviewer").GetValue(dialog,null)!="Борис")errors.Add("manual box selection failed");
+        }
+    }
     // Fully inside the client area of every parent up to the page, which scrolls.
     static bool Inside(Control c){var r=new Rectangle(Point.Empty,c.Size);for(Control k=c;k.Parent!=null&&!(k is TabPage);k=k.Parent){r.Offset(k.Location);if(r.Left<0||r.Top<0||r.Right>k.Parent.ClientSize.Width||r.Bottom>k.Parent.ClientSize.Height)return false;}return true;}
     [STAThread] static int Main() {
         f=new MainForm();f.StartPosition=FormStartPosition.Manual;f.Location=new Point(0,0);f.Show();Pump();
         float scale=f.CurrentAutoScaleDimensions.Height/96f;var errors=new List<string>();
+        CheckBoxChoice(errors,false);CheckBoxChoice(errors,true);
         var link=Get<LinkLabel>("forgetNames");link.Text="Забыть сохранённые ответы (12)";link.Visible=true;f.PerformLayout();Pump();
         if(!Get<RadioButton>("rdMode").Checked&&!Inside(Get<CheckBox>("matchSurnames")))errors.Add("match surnames checkbox hidden "+Get<CheckBox>("matchSurnames").Bounds);
         if(!Inside(link)||link.Width<link.GetPreferredSize(Size.Empty).Width-1)errors.Add("forget link "+link.Bounds);
@@ -43,4 +59,4 @@ subprocess.run([compiler, flag + 'nologo', flag + 'codepage:65001', flag + 'targ
 run = [str(OUT / 'UiTest.exe')] if windows else ['mono', str(OUT / 'UiTest.exe')]
 result = subprocess.run(run, cwd=OUT, capture_output=True, text=True, timeout=120)
 assert result.returncode == 0, result.stdout + result.stderr
-print('UI tests passed: surname matching and the forget link stay visible, toolbar buttons are not clipped, a short window scrolls and keeps the list and the log, quoted paths')
+print('UI tests passed: box recommendation, tie and manual choice, visible controls, scroll layout and quoted paths')
