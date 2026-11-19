@@ -138,7 +138,7 @@ namespace ReviewMerge {
             if(old!=null)old.ReplaceWith(value);else row.Add(value);
         }
         string Ref(string name,string col,int start,int last){return "'"+name.Replace("'","''")+"'!$"+col+"$"+start+":$"+col+"$"+last;}
-        public void Save(string firstFile,string output,string mainName,DateTime asOf,MergeResult result,Action<int,string> progress,CancellationToken token) {
+        public void Save(string firstFile,string output,string mainName,DateTime asOf,MergeResult result,Action<int,string> progress,CancellationToken token,string reportFileName=null) {
             using(var s=File.OpenRead(firstFile))using(var z=new ZipArchive(s,ZipArchiveMode.Read))foreach(var e in z.Entries){using(var m=new MemoryStream())using(var es=e.Open()){es.CopyTo(m);entries[e.FullName]=m.ToArray();}}
             book=Xml("xl/workbook.xml");rels=Xml("xl/_rels/workbook.xml.rels");types=Xml("[Content_Types].xml");
             var pr=book.Root.Element(N+"workbookPr");if(pr!=null && ((string)pr.Attribute("date1904")=="1" || (string)pr.Attribute("date1904")=="true"))throw new InvalidDataException("Первый файл использует систему дат 1904. Выберите первым файл с системой дат 1900.");
@@ -183,7 +183,7 @@ namespace ReviewMerge {
             var filter=main.Root.Element(N+"autoFilter");
             if(filter!=null){string right=Regex.Match((string)filter.Attribute("ref")??"",@":\$?([A-Z]+)").Groups[1].Value;filter.SetAttributeValue("ref","A"+result.HeaderRow+":"+MergeEngine.ExcelColumn(Math.Max(Math.Max(mainColumns.Count,resolvedColumn),Column(right)))+last);}
             Store(mainPath,main);progress(65,"Данные проверки объединены. Статистика рассчитывается на листе «Свод»");
-            RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags);
+            RemoveGeneratedLogs();WriteCurrentSummary(actualName,result,asOf,rowNumbers,boxKeys,dates,issues,checkedFlags,reportFileName??output,firstFile);
             if(!options.KeepLegacyReport)progress(82,"Пересозданы 4 отчётных листа: СВОД, Стат. по типам, Стат. по зам., Итоги работы.");
             Finish(output,result,asOf,progress,token);
         }

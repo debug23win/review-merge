@@ -111,6 +111,36 @@ def test_number_conflict_and_legacy_target():
     assert list(TEMP.glob('legacy-master.xlsx.backup-*'))[0].read_bytes() == before
 
 
+def test_stage_and_numbers_shared_by_documentation_kinds():
+    target = make(TEMP / 'stage-report.xlsx', True)
+    book = load_workbook(target)
+    register = book[MAIN]
+    register.delete_rows(7, register.max_row - 6)
+    records = [
+        ('Том ПД Фрагмент 1', 'ПД', '1.1.1', 'Анна'),
+        ('Том ПД Фрагмент 2', 'ПД', '1.1.1', 'Анна'),
+        ('Том ПД-ИУЛ', None, None, 'Анна'),
+        ('Том ИИ', 'ИИ', '1.1.1', 'Борис'),
+    ]
+    for row, (name, kind, number, reviewer) in enumerate(records, 7):
+        for col, value in {3: name, 4: 'pdf', 8: f'{row:08X}', 9: reviewer,
+                           10: datetime(2026, 10, 4), 11: kind, 12: 1, 13: number}.items():
+            register.cell(row, col, value)
+    book.create_sheet('Свод')['A2'] = 'Этап 1 ВСМ-1'
+    book.create_sheet('Хронология')['A2'] = 'ХРОНОЛОГИЯ ПРИЕМКИ ДОКУМЕНТАЦИИ 2 ЭТАПА ВСМ-1'
+    book.save(target)
+
+    run(target, target)
+    report = load_workbook(target, data_only=True)
+    for name in ('СВОД', 'Стат. по типам', 'Стат. по зам.', 'Итоги работы'):
+        sheet = report[name]
+        assert sheet['A2'].value == 'Этап 2 ВСМ-1'
+        labels = [cell.value for cell in sheet['A'] if str(cell.value).startswith('Этап ')]
+        assert set(labels) == {'Этап 2 ВСМ-1', 'Этап 2'}, (name, labels)
+    assert report['СВОД']['F8'].value == report['СВОД']['J8'].value == 2
+    assert report['Итоги работы']['D6'].value == report['Итоги работы']['F6'].value == 1
+
+
 def test_formatted_summary_is_preserved():
     target = make(TEMP / 'formatted.xlsx', True, '01.02')
     run(target, target, legacy=True)
@@ -153,5 +183,6 @@ if __name__ == '__main__':
     test_mixed_columns_and_text()
     test_number_is_not_a_remark()
     test_number_conflict_and_legacy_target()
+    test_stage_and_numbers_shared_by_documentation_kinds()
     test_formatted_summary_is_preserved()
     print('Volume column tests passed: mixed schemas, text identifiers, all six marks, both notes, append, conflicts, repeat merge, formulas and formatted summary')

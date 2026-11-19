@@ -430,7 +430,7 @@ namespace ReviewMerge {
             string temp=Path.Combine(parent,"~merge-"+Guid.NewGuid().ToString("N")+".xlsx");
             try {
                 Check(token);progress(45,"Создание XLSX с формулами");
-                new XlsxWriter(options).Save(sources[0],temp,mainName,asOf,result,progress,token);
+                new XlsxWriter(options).Save(sources[0],temp,mainName,asOf,result,progress,token,output);
                 Check(token);
                 if(exists) {
                     if(!File.Exists(output)||Digest(output)!=before)throw new IOException("Сводный документ изменился во время сборки. Запись отменена; повторите сборку с актуальным файлом.");

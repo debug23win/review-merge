@@ -94,13 +94,14 @@ namespace ReviewMerge {
                 if(style!=CellStyle(cell,bodyStyle))cell.SetAttributeValue("s",style);
             }}
         }
-        void SplitFormattedReport(XDocument source) {
+        void SplitFormattedReport(XDocument source,int? stage) {
             int typesRow=CaptionRow(source,"КОЛИЧЕСТВО ЗАМЕЧАНИЙ ПО ТИПАМ"),remarksRow=CaptionRow(source,"СТАТИСТИКА ПО ОСНОВНОМУ ЛИСТУ"),workRow=CaptionRow(source,"ПРОВЕРЕНО ПО ПРОВЕРЯЮЩИМ"),altRow=CaptionRow(source,"АЛЬТЕРНАТИВНОЕ ПРЕДСТАВЛЕНИЕ");
             if(remarksRow==0)remarksRow=CaptionRow(source,"СТАТИСТИКА ПО ЗАМЕЧАНИЯМ");
             // Already split (or another custom template): retain it and update all report links.
             if(typesRow==0||remarksRow==0||workRow==0||altRow==0){
+                UpdateStageCaptions(source.Descendants(N+"c"),stage);
                 PutSheet("СВОД",source);
-                foreach(string name in new[]{"Стат. по типам","Стат. по зам.","Итоги работы"}){string path=PathFor(name);if(path==null)continue;var doc=Xml(path);RefreshFormattedSummary(doc,referenceLayout.Helper,referenceLayout.BoxFiles.Count+6,referenceLayout.Volumes.Count+6);PolishSplitReport(doc,name);PutSheet(name,doc);}
+                foreach(string name in new[]{"Стат. по типам","Стат. по зам.","Итоги работы"}){string path=PathFor(name);if(path==null)continue;var doc=Xml(path);RefreshFormattedSummary(doc,referenceLayout.Helper,referenceLayout.BoxFiles.Count+6,referenceLayout.Volumes.Count+6);PolishSplitReport(doc,name);UpdateStageCaptions(doc.Descendants(N+"c"),stage);PutSheet(name,doc);}
                 return;
             }
             string[] sheetNames={"СВОД","Стат. по типам","Стат. по зам.","Итоги работы"};var grids=sheetNames.ToDictionary(n=>n,n=>new Grid());var mergeLists=sheetNames.ToDictionary(n=>n,n=>new List<string>());
@@ -131,7 +132,7 @@ namespace ReviewMerge {
                 for(int c=start;c<=start+2;c+=2){main.Set(5,c,c==start?"коробов":"томов",style);main.Set(6,c,"Шт.",style);main.Set(6,c+1,"%",CellStyle(at(5,c+1),style));mergeLists[sheetNames[0]].Add(MergeEngine.ExcelColumn(c)+"5:"+MergeEngine.ExcelColumn(c+1)+"5");}
             }
             main.Heights[4]=29;main.Heights[5]=29;main.Heights[6]=29;
-            for(int r=7;r<=mainLast;r++)if(main.Rows.ContainsKey(r)&&main.Rows[r].ContainsKey(1))main.Rows[r][1].RemoveNodes();main.Set(7,1,"Этап 1",CellStyle(at(6,1),bodyStyle));mergeLists[sheetNames[0]].Add("A7:A"+mainLast);
+            for(int r=7;r<=mainLast;r++)if(main.Rows.ContainsKey(r)&&main.Rows[r].ContainsKey(1))main.Rows[r][1].RemoveNodes();main.Set(7,1,StageLabel(stage??1),CellStyle(at(6,1),bodyStyle));mergeLists[sheetNames[0]].Add("A7:A"+mainLast);
             foreach(var merge in source.Descendants(N+"mergeCell")){string raw=(string)merge.Attribute("ref");var p=Regex.Match(raw,@"^([A-Z]+)(\d+):([A-Z]+)(\d+)$");if(!p.Success)continue;int r=int.Parse(p.Groups[2].Value,Inv),end=int.Parse(p.Groups[4].Value,Inv),c=Column(p.Groups[1].Value);string name=null;int shift=0;
                 if(r<=3&&end<=3){name=sheetNames[0];}
                 else if(r>=typesRow+1&&end<remarksRow){name=sheetNames[1];shift=3-typesRow;}
@@ -142,7 +143,7 @@ namespace ReviewMerge {
             var work=grids[sheetNames[3]];int workHeader=ReportStyle(CellStyle(at(workRow+1,5),headerStyle),color:"FF000000",bold:true);
             work.Set(1,1,"СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ",CellStyle(at(workRow,1),titleStyle));
             work.Set(2,1,val(2,1),CellStyle(at(2,1),bodyStyle));mergeLists[sheetNames[3]].Add("A1:"+MergeEngine.ExcelColumn(2+starts.Count*2)+"1");mergeLists[sheetNames[3]].Add("A"+altTitle+":H"+altTitle);
-            work.Set(4,1,"Этап",workHeader);work.Set(4,2,"Дата",workHeader);work.Set(6,1,"Этап 1",bodyStyle);work.Set(6,2,"Всего",workHeader);mergeLists[sheetNames[3]].Add("A4:A5");mergeLists[sheetNames[3]].Add("B4:B5");mergeLists[sheetNames[3]].Add("A6:A"+matrixLast);
+            work.Set(4,1,"Этап",workHeader);work.Set(4,2,"Дата",workHeader);work.Set(6,1,StageLabel(stage??1),bodyStyle);work.Set(6,2,"Всего",workHeader);mergeLists[sheetNames[3]].Add("A4:A5");mergeLists[sheetNames[3]].Add("B4:B5");mergeLists[sheetNames[3]].Add("A6:A"+matrixLast);
             for(int i=0;i<starts.Count;i++){int old=starts[i],c=3+2*i;copy(at(workRow+1,old),sheetNames[3],4,c);mergeLists[sheetNames[3]].Add(MergeEngine.ExcelColumn(c)+"4:"+MergeEngine.ExcelColumn(c+1)+"4");
                 work.Set(5,c,"коробов",workHeader);work.Set(5,c+1,"томов",workHeader);copy(at(workRow+3,old),sheetNames[3],6,c);copy(at(workRow+2,old),sheetNames[3],6,c+1);
                 for(int d=0;d<days.Count;d++){int r=7+d;copy(at(days[d]+1,old),sheetNames[3],r,c);copy(at(days[d],old),sheetNames[3],r,c+1);}
@@ -153,6 +154,7 @@ namespace ReviewMerge {
             grids[sheetNames[2]].Set(1,1,"СТАТИСТИКА ПО ЗАМЕЧАНИЯМ",CellStyle(at(remarksRow,1),titleStyle));
             foreach(string name in new[]{sheetNames[1],sheetNames[2]})for(int c=3;c<=(name==sheetNames[1]?22:16);c+=2){var g=grids[name];g.Set(5,c,"Шт.",CellStyle(g.Rows[5][c],headerStyle));g.Set(5,c+1,"%",CellStyle(g.Rows[5][c+1],headerStyle));}
             mergeLists[sheetNames[1]].Add("A1:V1");mergeLists[sheetNames[2]].Add("A1:P1");
+            foreach(var grid in grids.Values)UpdateStageCaptions(grid.Rows.Values.SelectMany(r=>r.Values),stage);
             foreach(string name in sheetNames)foreach(var cell in grids[name].Rows.Values.SelectMany(r=>r.Values)){var f=cell.Element(N+"f");if(f!=null)f.Value=RemapReportFormula(f.Value,name);}
             foreach(string path in entries.Keys.Where(p=>p.StartsWith("xl/worksheets/",StringComparison.Ordinal)&&p.EndsWith(".xml",StringComparison.Ordinal)&&p!=PathFor("Свод")).ToList()){
                 var doc=Xml(path);bool changed=false;foreach(var f in doc.Descendants(N+"f"))if(f.Value.Contains("Свод")||f.Value.Contains("СВОД")){string next=RemapReportFormula(f.Value,null,true);if(next!=f.Value){f.Value=next;changed=true;}}if(changed)Store(path,doc);

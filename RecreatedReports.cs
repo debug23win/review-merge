@@ -1,13 +1,51 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
+        int? SingleStage(IEnumerable<object> values) {
+            var stages = values.SelectMany(Rules.StageNumbers).Distinct().Take(2).ToList();
+            return stages.Count == 1 ? (int?)stages[0] : null;
+        }
+        int? ReportStage(XDocument previous,string reportFileName,string firstFile) {
+            string chronology = PathFor("Хронология");
+            if (chronology != null) {
+                var headings = Xml(chronology).Descendants(N+"row").Where(row => (int)row.Attribute("r") <= 4)
+                    .SelectMany(row => row.Elements(N+"c")).Select(Value);
+                int? stage = SingleStage(headings);
+                if (stage.HasValue) return stage;
+            }
+            int? filenameStage = SingleStage(new[] { Path.GetFileNameWithoutExtension(reportFileName) })
+                ?? SingleStage(new[] { Path.GetFileNameWithoutExtension(firstFile) });
+            if (filenameStage.HasValue || previous == null) return filenameStage;
+            return SingleStage(previous.Descendants(N+"c")
+                .Where(cell => Column((string)cell.Attribute("r")) == 1 && cell.Element(N+"f") == null)
+                .Select(Value).Where(value => StageCaption.IsMatch(Text(value))));
+        }
+        static readonly Regex StageCaption = new Regex(@"^(?<prefix>\s*Этап\s+)[0-9]+(?<suffix>(?:\s+ВСМ[-–]1)?\s*)$", RegexOptions.IgnoreCase);
+        static string StageLabel(int stage) { return "Этап " + stage.ToString(Inv); }
+        void UpdateStageCaptions(IEnumerable<XElement> cells,int? stage) {
+            if (!stage.HasValue) return;
+            foreach (var cell in cells) {
+                string address = (string)cell.Attribute("r");
+                if (Column(address) != 1 || cell.Element(N+"f") != null) continue;
+                var caption = StageCaption.Match(Text(Value(cell)));
+                if (!caption.Success) continue;
+                int row = int.Parse(address.Substring(1),Inv);
+                string text = caption.Groups["prefix"].Value + stage.Value.ToString(Inv) + caption.Groups["suffix"].Value;
+                var replacement = Cell(row,1,text,CellStyle(cell,bodyStyle));
+                cell.SetAttributeValue("t",(string)replacement.Attribute("t"));
+                cell.ReplaceNodes(replacement.Nodes());
+            }
+        }
+
         [StructLayout(LayoutKind.Sequential)]struct ReportTextSize {public int Width,Height;}
         [DllImport("gdi32.dll")]static extern IntPtr CreateCompatibleDC(IntPtr device);
         [DllImport("gdi32.dll",CharSet=CharSet.Unicode,EntryPoint="CreateFontW")]static extern IntPtr CreateReportFont(int height,int width,int escapement,int orientation,int weight,uint italic,uint underline,uint strikeout,uint charset,uint outputPrecision,uint clipPrecision,uint quality,uint pitchAndFamily,string face);
@@ -98,7 +136,8 @@ namespace ReviewMerge {
             return lines<=1?0:lines*15+4;
         }
         int SummaryStylesBase,RecreatedGrayFill,RecreatedDecimal;
-        void WriteRecreatedReports(MergeResult result,List<double> calendar,DateTime asOf,List<double?> dates,List<int> issues,List<int[]> typeCounts,XDocument previous) {
+        void WriteRecreatedReports(MergeResult result,List<double> calendar,DateTime asOf,List<double?> dates,List<int> issues,List<int[]> typeCounts,XDocument previous,int stageNumber) {
+            string stageLabel=StageLabel(stageNumber);
             var l=referenceLayout;int h=l.Helper,fl=Math.Max(7,result.Rows.Count+6),vl=Math.Max(7,l.Volumes.Count+6);
             // Every day of the reports is calculated from the current data at every build.
             SummaryStylesBase=SummaryStyles()[0];var fills=styles.Root.Element(N+"fills");RecreatedGrayFill=fills.Elements().Count();
@@ -141,7 +180,7 @@ namespace ReviewMerge {
             };
             string black="FF000000",gold="FF996600",green="FF00B050",red="FFFF0000",blue="FF0070C0";
             int plain=RecreatedStyle(black,false),header=RecreatedStyle(black,true),heading=RecreatedStyle(black,false,table:false),title=RecreatedStyle(black,true,size:16,table:false);
-            Action<Grid,List<string>,string,int> start=(g,merges,text,width)=>{g.Set(1,1,text,title);g.Heights[1]=32;g.Set(2,1,"Этап 1 ВСМ-1",heading);merges.Add("A1:"+MergeEngine.ExcelColumn(width)+"1");};
+            Action<Grid,List<string>,string,int> start=(g,merges,text,width)=>{g.Set(1,1,text,title);g.Heights[1]=32;g.Set(2,1,stageLabel+" ВСМ-1",heading);merges.Add("A1:"+MergeEngine.ExcelColumn(width)+"1");};
             Action<Grid,int,int,Tuple<double,string>,string,bool,bool> set=(g,r,c,value,color,bold,gray)=>g.Set(r,c,value.Item1,RecreatedStyle(color,bold,1,gray),value.Item2);
             Action<Grid,int,int,int,double,string,string,bool,bool,bool,double,string> pair=(g,r,c,kind,serial,day,who,daily,bold,gray,denominator,denomFormula)=> {
                 var v=metric(kind,serial,day,who,daily);bool future=serial>asOf.ToOADate();string color=black;
@@ -174,7 +213,7 @@ namespace ReviewMerge {
             }
             // Percentages of the summary are italic, size 9; their colors, borders, fill and format stay.
             for(int r=top+3;r<mr;r++)for(int c=5;c<=19;c+=2){XElement cell;if(main.Rows.ContainsKey(r)&&main.Rows[r].TryGetValue(c,out cell))cell.SetAttributeValue("s",ReportStyle(CellStyle(cell,plain),size:9,italic:true));}
-            main.Set(top+3,1,"Этап 1",plain);if(mr>top+4)mm.Add("A"+(top+3)+":A"+(mr-1));TableEdges(main,top,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},top+2);
+            main.Set(top+3,1,stageLabel,plain);if(mr>top+4)mm.Add("A"+(top+3)+":A"+(mr-1));TableEdges(main,top,mr-1,19,Enumerable.Range(0,8).Select(i=>5+2*i),new[]{2,3,4,8,12,16},top+2);
             // Volumes with remarks right above the table: checked up to the report date, resolved in «Замечания устранены», still being resolved.
             // Each is two lines of plain text over its block (Всего, Проверено, Осталось проверить), framed when the option says so.
             {double cut=asOf.ToOADate();var remarked=l.Volumes.Where(v=>v.IsVolume&&v.Issue==1&&v.Date.HasValue&&v.Date.Value>0&&v.Date.Value<=cut).ToList();int resolved=remarked.Count(v=>v.Resolved==1);
@@ -198,10 +237,10 @@ namespace ReviewMerge {
                         if(!types)colorCells(g,r,c,c+1,i==0?gold:i<=2?green:i<=4?red:blue);
                     }
                 }group(g,summary+1,row-1,"",true);if(names.Count>0)g.Templates[summary]=new XElement(N+"row",new XAttribute("r",summary),new XAttribute("collapsed",1));}
-                g.Set(6,1,"Этап 1",plain);if(row>7)merges.Add("A6:A"+(row-1));TableEdges(g,4,row-1,width,Enumerable.Range(0,labels.Length).Select(i=>4+2*i),null,5);
+                g.Set(6,1,stageLabel,plain);if(row>7)merges.Add("A6:A"+(row-1));TableEdges(g,4,row-1,width,Enumerable.Range(0,labels.Length).Select(i=>4+2*i),null,5);
                 if(!types)for(int c=3;c<=16;c++){colorCells(g,4,c,c,c<=4?gold:c<=8?green:c<=12?red:blue);colorCells(g,5,c,c,c<=4?gold:c<=8?green:c<=12?red:blue);}
                 var areas=new List<string>{"A1:"+MergeEngine.ExcelColumn(width)+(row-1)};
-                if(!types){int r=row+2;g.Set(r,1,"Этап",header);g.Set(r,2,"Вид документации",header);g.Set(r,3,"Файлов в реестре",header);g.Set(r,4,"Проверено файлов",header);g.Set(r,5,"С замечаниями",header);g.Heights[r]=60;g.Set(r+1,1,"Этап 1",plain);merges.Add("A"+(r+1)+":A"+(r+4));
+                if(!types){int r=row+2;g.Set(r,1,"Этап",header);g.Set(r,2,"Вид документации",header);g.Set(r,3,"Файлов в реестре",header);g.Set(r,4,"Проверено файлов",header);g.Set(r,5,"С замечаниями",header);g.Heights[r]=60;g.Set(r+1,1,stageLabel,plain);merges.Add("A"+(r+1)+":A"+(r+4));
                     string kr=range(8,fl);int j=0;foreach(string kind in new[]{"ИИ","ПД","ДПТ"}){int q=r+1+j++;g.Set(q,2,kind,plain);var ids=Enumerable.Range(0,result.Rows.Count).Where(i=>Text(result.Rows[i].Values[10])==kind).ToList();g.Set(q,3,ids.Count,plain,"COUNTIF("+kr+",$B"+q+")");g.Set(q,4,ids.Count(i=>dates[i].HasValue&&dates[i]<=asOf.ToOADate()),plain,"COUNTIFS("+kr+",$B"+q+","+fd+",\">0\","+fd+",\"<=\"&"+cutoff+")");g.Set(q,5,ids.Count(i=>dates[i].HasValue&&dates[i]<=asOf.ToOADate()&&issues[i]==1),plain,"COUNTIFS("+kr+",$B"+q+","+fd+",\">0\","+fd+",\"<=\"&"+cutoff+","+fi+",1)");}
                     g.Set(r+4,2,"Не проверено",plain);g.Set(r+4,3,result.Documents-dates.Count(d=>d.HasValue&&d<=asOf.ToOADate()),plain,"COUNTA("+range(11,fl)+")-COUNTIFS("+fd+",\">0\","+fd+",\"<=\"&"+cutoff+")");TableEdges(g,r,r+4,5);areas.Add("A"+r+":E"+(r+4));
                 }
@@ -210,7 +249,7 @@ namespace ReviewMerge {
             // Reviewer matrix and its alternative grouped representation.
             var work=new Grid();var wm=new List<string>();int ww=4+people.Count*2;start(work,wm,"СВОДНАЯ ТАБЛИЦА ПО ИТОГАМ РАБОТЫ ПРОВЕРЯЮЩИХ",ww);
             // The title of the work totals is not merged: it starts in A1 and runs over the empty cells to the right.
-            wm.Remove("A1:"+MergeEngine.ExcelColumn(ww)+"1");work.Rows[1][1].SetAttributeValue("s",LeftAligned(title));work.Set(4,1,"Этап",header);work.Set(4,2,"Дата",header);wm.Add("A4:A5");wm.Add("B4:B5");work.Set(6,1,"Этап 1",plain);work.Set(6,2,"Всего",header);
+            wm.Remove("A1:"+MergeEngine.ExcelColumn(ww)+"1");work.Rows[1][1].SetAttributeValue("s",LeftAligned(title));work.Set(4,1,"Этап",header);work.Set(4,2,"Дата",header);wm.Add("A4:A5");wm.Add("B4:B5");work.Set(6,1,stageLabel,plain);work.Set(6,2,"Всего",header);
             // The final pair counts unique boxes/volumes directly, just like the dated summary.
             // It must not add box and volume units together or duplicate a shared box.
             var workPeople=people.Concat(new[]{""}).ToList();
@@ -226,7 +265,7 @@ namespace ReviewMerge {
             string[] ah={"Этап","Проверяющий / дата","Проверено томов","Томов с замечаниями","Томов за день","Проверено файлов","Файлов без даты","Проверено коробов"};for(int c=1;c<=8;c++)work.Set(ar,c,ah[c-1],header);work.Heights[ar]=60;ar++;
             foreach(string who in people){int summary=ar++;work.Set(summary,2,who,header);if(NameHeight(who,7*16+5,true)>0)work.Heights[summary]=NameHeight(who,7*16+5,true);int[] kinds={3,7,9,5,20,2};for(int k=0;k<6;k++)set(work,summary,k+3,metric(kinds[k],asOf.ToOADate(),cutoff,who,k==2),green,true,false);
                 foreach(double serial in days.Where(d=>owners(d).Contains(who))){int r=ar++;work.Set(r,2,serial,RecreatedStyle(black,false,df));for(int k=0;k<6;k++){var v=metric(kinds[k],serial,"$B"+r,who,true);work.Set(r,k+3,serial>asOf.ToOADate()?(object)"":v.Item1,RecreatedStyle(k==2?blue:black,false,1),"IF($B"+r+">"+cutoff+",\"\","+v.Item2+")");}}group(work,summary+1,ar-1,"",false);
-            }work.Set(alt+2,1,"Этап 1",plain);if(ar>alt+3)wm.Add("A"+(alt+2)+":A"+(ar-1));TableEdges(work,alt+1,ar-1,8);
+            }work.Set(alt+2,1,stageLabel,plain);if(ar>alt+3)wm.Add("A"+(alt+2)+":A"+(ar-1));TableEdges(work,alt+1,ar-1,8);
             // Keep the user's free-form notes from the old report, without copying its old tables.
             var notes=new List<string>();if(previous!=null)foreach(var cell in previous.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c")){if(cell.Element(N+"f")!=null)continue;string text=Text(Value(cell));if(text.StartsWith("Примечание",StringComparison.OrdinalIgnoreCase)||text.StartsWith("Примечания",StringComparison.OrdinalIgnoreCase))notes.Add(text);}
             foreach(string text in notes.Distinct()){int r=mr+1;main.Set(r,1,text,heading);mm.Add("A"+r+":S"+r);mr+=2;}

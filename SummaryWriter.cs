@@ -118,8 +118,9 @@ namespace ReviewMerge {
             if(end>1)merges.Add(new XElement(N+"mergeCell",new XAttribute("ref","A"+row+":"+MergeEngine.ExcelColumn(end)+row)));
             merges.SetAttributeValue("count",merges.Elements().Count());
         }
-        void WriteCurrentSummary(string name,MergeResult result,DateTime asOf,List<int> rowNumbers,List<List<string>> keys,List<double?> dates,List<int> issues,List<int> checked_) {
+        void WriteCurrentSummary(string name,MergeResult result,DateTime asOf,List<int> rowNumbers,List<List<string>> keys,List<double?> dates,List<int> issues,List<int> checked_,string reportFileName,string firstFile) {
             string oldPath=PathFor("Свод");XDocument previous=oldPath==null?null:Xml(oldPath);
+            int? stage=ReportStage(previous,reportFileName,firstFile);
             bool reference=previous!=null&&XlsxReader.Normal(Value(At(previous,7,1))).Contains("ПОЛУЧЕНО КОРОБ")&&XlsxReader.Normal(Value(At(previous,8,1))).Contains("ТОМОВ ПО АКТУ");
             bool formatted=previous!=null&&previous.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>(int)r.Attribute("r")<=10).Any(r=>
                 XlsxReader.Normal(Value(r.Elements(N+"c").FirstOrDefault(c=>Column((string)c.Attribute("r"))==1)))=="ЭТАП"&&
@@ -214,13 +215,13 @@ namespace ReviewMerge {
             string xr=LocalRange(h+3,7,last),zr=LocalRange(h+5,7,last),cr=LocalRange(h+11,7,last),vdr=LocalRange(vh+1,7,vlast),vir=LocalRange(vh+2,7,vlast),isv=","+LocalRange(h+2,7,vlast)+",1";
             if(!options.KeepLegacyReport) {
                 WriteReference(g,h,1);
-                WriteRecreatedReports(result,calendar,asOf,dates,issues,typeCounts,previous);
+                WriteRecreatedReports(result,calendar,asOf,dates,issues,typeCounts,previous,stage??1);
                 return;
             }
             if(formatted) {
                 WriteReference(g,h,previous.Root.Element(N+"sheetData").Elements(N+"row").Select(r=>(int)r.Attribute("r")).DefaultIfEmpty(1).Max());
                 RefreshFormattedSummary(previous,h,last,vlast);
-                SplitFormattedReport(previous);
+                SplitFormattedReport(previous,stage);
                 return;
             }
             g.Set(20,1,"СТАТИСТИКА ПО ОСНОВНОМУ ЛИСТУ",defaults[8]);g.Heights[20]=24;
