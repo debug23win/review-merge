@@ -68,29 +68,48 @@ namespace ReviewMerge {
         // Same person written identically apart from case, spaces after initials and Ё.
         public static string NameKey(string name) { return Regex.Replace(CleanName(name), @"\.\s+", ".").ToUpperInvariant().Replace('Ё', 'Е'); }
 
-        // Boxes: 45; "45 и 46"; "45,46"; "45-48" (consecutive boxes 45..48). Words and signs are ignored: "№2", "короб2", "к. №2" are box 2.
-        public static List<int> ParseBoxes(object value, out bool valid) {
-            var result = new List<int>(); valid = true;
-            if (value == null) return result;
-            if (value is double || value is int || value is long) {
-                double d = Convert.ToDouble(value, Inv);
-                if (d > 0 && d == Math.Floor(d) && d < 1000000) result.Add((int)d); else valid = false;
-                return result;
+        internal const string BoxCharacters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ.";
+        internal const int MaxBoxIdLength = 48;
+        // Shared with the worksheet formulas. Prefixes are removed at the start of a token only.
+        internal static readonly string[][] BoxSigns = {
+            new[]{"–","-"}, new[]{"—","-"}, new[]{" -","-"}, new[]{"- ","-"}, new[]{" И ",","},
+            new[]{";",","}, new[]{"/",","}, new[]{":",","}, new[]{"№",""}, new[]{"#",""},
+            new[]{"(",""}, new[]{")",""}, new[]{" ",","}, new[]{",КОРОБА",","}, new[]{",КОРОБ",","},
+            new[]{",КОР.",","}, new[]{",К.",","}, new[]{",,",","}, new[]{",,",","}
+        };
+        internal static string BoxNormal(object value) {
+            string text = "," + CleanName(value).ToUpperInvariant();
+            foreach (var pair in BoxSigns) text = text.Replace(pair[0], pair[1]);
+            return text.Substring(1);
+        }
+        static readonly Regex BoxId = new Regex(@"^[1-9][A-ZА-ЯЁ0-9]*(?:\.[A-ZА-ЯЁ0-9]+)*$", RegexOptions.CultureInvariant);
+        static string CanonicalBoxId(string part) {
+            part = Regex.Replace(part, @"^([0-9]+)\.0+$", "$1").TrimStart('0');
+            if (part.Length == 0 || part.Length > MaxBoxIdLength || !BoxId.IsMatch(part)) return null;
+            return Regex.IsMatch(part, @"^[0-9]{7}") ? null : part;
+        }
+        // An identifier is text, not a floating point number: 1, 1А, 1.1 and 1.10 are all distinct.
+        public static List<string> ParseBoxes(object value, out bool valid) {
+            var result = new List<string>(); valid = true;
+            string raw = Text(value);
+            if (raw == "") return result;
+            string text = Regex.Replace(BoxNormal(value), @"^([0-9]+),0+$", "$1");
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string part in text.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)) {
+                var range = Regex.Match(part, @"^([0-9]+)-([0-9]+)$");
+                if (range.Success) {
+                    int from, to;
+                    if (!int.TryParse(range.Groups[1].Value, out from) || !int.TryParse(range.Groups[2].Value, out to) ||
+                        from <= 0 || to < from || to >= 1000000 || to - from >= MaxBoxesInCell) { valid = false; return new List<string>(); }
+                    for (int n = from; n <= to; n++) { string id = n.ToString(Inv); if (seen.Add(id)) result.Add(id); }
+                } else {
+                    string id = CanonicalBoxId(part);
+                    if (id == null) { valid = false; return new List<string>(); }
+                    if (seen.Add(id)) result.Add(id);
+                }
+                if (result.Count > MaxBoxesInCell) { valid = false; return new List<string>(); }
             }
-            string s = Text(value);
-            if (s == "") return result;
-            s = Regex.Replace(s, @"(\d)[.,]0+(?!\d)", "$1");
-            s = Regex.Replace(s, @"\s*[-–—]\s*", "-");
-            s = Regex.Replace(s, @"[^\d-]+", ",");
-            s = Regex.Replace(s, @"(?<!\d)-|-(?!\d)", ",");
-            foreach (string part in s.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)) {
-                var m = Regex.Match(part, @"^(\d{1,6})(?:-(\d{1,6}))?$");
-                if (!m.Success) { valid = false; return new List<int>(); }
-                int from = int.Parse(m.Groups[1].Value, Inv), to = m.Groups[2].Success ? int.Parse(m.Groups[2].Value, Inv) : from;
-                if (from <= 0 || to < from || to - from >= MaxBoxesInCell) { valid = false; return new List<int>(); }
-                for (int n = from; n <= to; n++) if (!result.Contains(n)) result.Add(n);
-            }
-            if (result.Count == 0 || result.Count > MaxBoxesInCell) { valid = false; return new List<int>(); }
+            valid = result.Count != 0;
             return result;
         }
         // «Замечания устранены»: 1, a date or any other mark; empty, 0 and «нет» are not a mark. The Справка formula mirrors this.
@@ -128,13 +147,12 @@ namespace ReviewMerge {
         public static string Kind(object kind) { string k = Text(kind).Trim().ToUpperInvariant(); return k == "" ? "Не указан" : k; }
         public static List<string> BoxKeys(object kind, object box) {
             bool valid; string k = Kind(kind);
-            return ParseBoxes(box, out valid).Select(n => k + "|" + n.ToString(Inv)).ToList();
+            return ParseBoxes(box, out valid).Select(n => k + "|" + n).ToList();
         }
         // Several boxes of one record are kept as ";ПД|45;ПД|46;" so formulas can look for ";ПД|45;".
         public static string BoxList(IEnumerable<string> keys) { var list = keys.ToList(); return list.Count == 0 ? "" : ";" + string.Join(";", list) + ";"; }
         public static string BoxDisplay(string key) { int bar = key.IndexOf('|'); return bar < 0 ? key : key.Substring(bar + 1) + key.Substring(0, bar).ToLowerInvariant(); }
         public static string BoxListDisplay(string list) { return string.Join(", ", (list ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(BoxDisplay)); }
-        public static bool PlainBoxNumber(object box) { bool valid; var list = ParseBoxes(box, out valid); return valid && list.Count == 1 && Regex.IsMatch(Text(box), @"^\d+(?:\.0+)?$"); }
 
         public static IEnumerable<int> StageNumbers(object value) {
             var pattern = @"(?<![\p{L}\p{N}])(?:ЭТАП\s*(?:№\s*)?(?<n>[0-9]+)|(?<n>[0-9]+)\s+ЭТАП(?:А|Е)?)(?![\p{L}\p{N}])";

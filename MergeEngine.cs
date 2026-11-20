@@ -59,7 +59,7 @@ namespace ReviewMerge {
         }
     }
     public sealed class MergeOptions {
-        public bool CurrentDateForNewReviews, MatchSurnames;
+        public bool CurrentDateForNewReviews, MatchSurnames, UpdateExistingReviews;
         // Working documentation: the RD check sheet («Проверка комплектов») instead of the PD register.
         public bool Rd;
         // «Примечание» (comments) counts as a remark: by default yes for PD, no for RD.
@@ -243,6 +243,7 @@ namespace ReviewMerge {
             // «Пересчитать статистику» changes no register data: no current date, no converted marks, no filled boxes.
             bool recalculate = options.RecalculateHistory;
             bool currentDateForNewReviews = options.CurrentDateForNewReviews && !recalculate;
+            bool updateExisting = options.UpdateExistingReviews && existingTarget && !recalculate;
             var result = new MergeResult { Files = files.Count };
             var byKey = new Dictionary<string, MergedRow>(StringComparer.Ordinal);
             // Documents with a CRC32 by name, format, upload date and time: a row of another file without CRC32 finds its document here.
@@ -294,7 +295,7 @@ namespace ReviewMerge {
                     string kind = XlsxReader.Normal(row.Values[10]);
                     if (kind != "" && kind != "ИИ" && kind != "ПД" && kind != "ДПТ") AddProblem(result, row, "Неизвестный вид документации: «" + Txt(row.Values[10]) + "».");
                     bool validBox; Rules.ParseBoxes(row.Values[11], out validBox);
-                    if (!validBox) AddProblem(result, row, "Номер короба не распознан: «" + Txt(row.Values[11]) + "». Укажите целое число; несколько коробов — через запятую или «и», короба подряд — через дефис (45-48).");
+                    if (!validBox) AddProblem(result, row, "Номер короба не распознан: «" + Txt(row.Values[11]) + "». Укажите номер, например 1, 1А или 1.1. Несколько коробов — через запятую или «и», диапазон целых номеров — через дефис (45-48).");
                 }
                 progress((int)(40.0 * (fi + 1) / files.Count), "Прочитано: " + source.Rows.Count + " документов, " + source.Orphans.Count + " строк без документа");
             }
@@ -313,25 +314,30 @@ namespace ReviewMerge {
                 Check(token);
                 var reviews = merged.Reviews;
                 if (reviews.Count == 0) { for (int k=8;k<20;k++) merged.Values[k]=null; continue; }
+                var kept = existingTarget ? merged.TargetRow : null;
+                var updates = updateExisting && kept != null ? reviews.Where(r => !string.Equals(r.File, kept.File, StringComparison.OrdinalIgnoreCase)) : Enumerable.Empty<SourceRow>();
                 var numbered = reviews.Where(r => Txt(r.VolumeNumber) != "").ToList();
-                merged.VolumeNumber = existingTarget && merged.TargetRow != null && Txt(merged.TargetRow.VolumeNumber) != "" ? merged.TargetRow.VolumeNumber : numbered.Count == 0 ? null : Latest(numbered).VolumeNumber;
+                var updatedNumber = Latest(updates.Where(r => Txt(r.VolumeNumber) != ""));
+                merged.VolumeNumber = updatedNumber != null ? updatedNumber.VolumeNumber : kept != null && Txt(kept.VolumeNumber) != "" ? kept.VolumeNumber : numbered.Count == 0 ? null : Latest(numbered).VolumeNumber;
                 if (!result.Columns.HasVolumeNumber && Txt(merged.VolumeNumber) != "")
                     throw new InvalidDataException("В источнике заполнен «Номер тома», а в сводном документе этого столбца нет. Добавьте «Номер тома» сразу после «Короб»: данные не записаны и не потеряны.");
-                bool numberDecided = existingTarget && merged.TargetRow != null && Txt(merged.TargetRow.VolumeNumber) != "" && numbered.Any(r => r != merged.TargetRow && XlsxReader.Normal(r.VolumeNumber) == XlsxReader.Normal(merged.TargetRow.VolumeNumber));
+                bool numberDecided = kept != null && Txt(kept.VolumeNumber) != "" && (updatedNumber != null ? XlsxReader.Normal(updatedNumber.VolumeNumber) == XlsxReader.Normal(kept.VolumeNumber) : numbered.Any(r => r != kept && XlsxReader.Normal(r.VolumeNumber) == XlsxReader.Normal(kept.VolumeNumber)));
                 if (!numberDecided && numbered.Select(r => r.VolumeNumber).Distinct(StringComparer.Ordinal).Count() > 1)
-                    result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = "M — Номер тома", Details = string.Join("\n",numbered.Select(r => Path.GetFileName(r.File) + ", строка " + r.Row + ": " + r.VolumeNumber)), Decision = "Заполненный номер сводного документа сохранён; иначе выбран номер последнего датированного источника. Требуется сверка." });
+                    result.Conflicts.Add(new Conflict { Document = Txt(merged.Values[2]), Field = "M — Номер тома", Details = string.Join("\n",numbered.Select(r => Path.GetFileName(r.File) + ", строка " + r.Row + ": " + r.VolumeNumber)), Decision = updatedNumber != null ? "Номер тома обновлён из последнего датированного источника с номером." : "Заполненный номер сводного документа сохранён; иначе выбран номер последнего датированного источника. Требуется сверка." });
                 var named = reviews.Where(r => Txt(r.Values[8]) != "").ToList();
                 SourceRow winner = Latest(named.Count > 0 ? named : reviews);
                 merged.Values[8] = Txt(winner.Values[8]) == "" ? null : Txt(winner.Values[8]);
                 double? date = XlsxReader.DateSerial(winner.Values[9]);
                 merged.Values[9] = date.HasValue ? (object)date.Value : winner.Values[9];
+                var updatedFields = new HashSet<int>();
                 for (int col = 10; col <= 11; col++) {
-                    var chosen = reviews.FirstOrDefault(r => Txt(r.Values[col]) != "");
+                    var correction = Latest(updates.Where(r => Txt(r.Values[col]) != ""));
+                    var chosen = correction ?? reviews.FirstOrDefault(r => Txt(r.Values[col]) != "");
+                    if (correction != null) updatedFields.Add(col);
                     object value = chosen == null ? null : chosen.Values[col];
                     if (col == 10) value = Txt(value) == "" ? null : XlsxReader.Normal(value);
-                    if (col == 11 && value != null) {
-                        double n; if (double.TryParse(Txt(value), NumberStyles.Float, Inv, out n) && n > 0 && n == Math.Floor(n)) value = n;
-                    }
+                    int number;
+                    if (col == 11 && int.TryParse(Txt(value), NumberStyles.None, Inv, out number) && number > 0) value = (double)number;
                     merged.Values[col] = value;
                 }
                 for (int col = 12; col < 18; col++) {
@@ -339,7 +345,6 @@ namespace ReviewMerge {
                     merged.Values[col] = flags.Any(v => v is double && (double)v == 1) ? (object)1.0 : flags.FirstOrDefault(v => v != null);
                 }
                 // Fields already filled in the consolidated book stay as they are.
-                var kept = existingTarget ? merged.TargetRow : null;
                 if (kept != null && Txt(kept.Values[8]) != "") {
                     merged.Values[8] = Txt(kept.Values[8]);
                     double? keptDate = XlsxReader.DateSerial(kept.Values[9]);
@@ -354,25 +359,32 @@ namespace ReviewMerge {
                         if (sameDate.HasValue) result.Problems.RemoveAll(p => p.File == kept.File && p.Row == kept.Row && p.Detail == NoDate);
                     }
                 }
+                var updatedReview = Latest(updates.Where(r => Txt(r.Values[8]) != "" || XlsxReader.DateSerial(r.Values[9]).HasValue));
+                if (updatedReview != null) {
+                    if (Txt(updatedReview.Values[8]) != "") { merged.Values[8] = Txt(updatedReview.Values[8]); updatedFields.Add(8); }
+                    double? updatedDate = XlsxReader.DateSerial(updatedReview.Values[9]);
+                    if (updatedDate.HasValue) { merged.Values[9] = updatedDate.Value; updatedFields.Add(9); }
+                }
                 merged.Values[18] = JoinNotes(reviews,18); merged.Values[19] = JoinNotes(reviews,19);
                 if (Txt(merged.Values[18]).Length > 32767 || Txt(merged.Values[19]).Length > 32767)
                     throw new InvalidDataException("Объединённый текст замечаний превышает предел ячейки Excel (32767 символов): " + Txt(merged.Values[2]) + ". Источники сохранены; сократите тексты перед повторной сборкой.");
                 if(currentDateForNewReviews&&Txt(merged.Values[8])!=""){
                     double? saved=existingTarget&&merged.TargetRow!=null&&Txt(merged.TargetRow.Values[8])!=""?XlsxReader.DateSerial(merged.TargetRow.Values[9]):null;
-                    if(saved.HasValue)merged.Values[9]=saved.Value;
-                    else {merged.Values[9]=(importDate??DateTime.Today).Date.ToOADate();result.DatesAssignedToday++;}
+                    if(saved.HasValue) { if(!updatedFields.Contains(9))merged.Values[9]=saved.Value; }
+                    else {merged.Values[9]=(importDate??DateTime.Today).Date.ToOADate();updatedFields.Remove(9);result.DatesAssignedToday++;}
                 }
                 // A difference already taken into the consolidated book is not reported again on the next build.
                 var target = existingTarget ? merged.TargetRow : null;
                 for (int col = 8; col < 20; col++) {
-                    if (col == 9 && currentDateForNewReviews) continue;
+                    if (col == 9 && currentDateForNewReviews && !updatedFields.Contains(9)) continue;
                     var active = reviews.Where(r => Txt(r.Values[8]) != "" || Txt(r.Values[col]) != "").ToList();
                     var distinct = active.Select(r => col == 9 ? Pretty(col,r.Values[col]) : XlsxReader.Normal(col >=12 && col<18 ? Flag(r.Values[col]) : r.Values[col])).Distinct().ToList();
                     if (distinct.Count < 2) continue;
                     if (target != null && active.Contains(target) && active.Where(r => r != target).All(r => Contained(col, r.Values[col], target.Values[col]))) continue;
                     // The kept I:L value of the consolidated book is the value of one of the files: the difference was decided by an earlier build.
-                    if (target != null && col <= 11 && active.Contains(target) && Txt(target.Values[col <= 9 ? 8 : col]) != "" && active.Any(r => r != target && (col <= 9 ? Rules.NameKey(Txt(r.Values[8])) == Rules.NameKey(Txt(target.Values[8])) && Pretty(9, r.Values[9]) == Pretty(9, target.Values[9]) : XlsxReader.Normal(r.Values[col]) == XlsxReader.Normal(target.Values[col])))) continue;
-                    string decision = col <= 11 && target != null && Txt(target.Values[col <= 9 ? 8 : col]) != "" ? "Значение сводного документа сохранено: из присланных файлов обновляются только отметки и замечания ("+result.Columns.Letter(13)+":"+result.Columns.Letter(20)+")." :
+                    if (!updatedFields.Contains(col) && target != null && col <= 11 && active.Contains(target) && Txt(target.Values[col <= 9 ? 8 : col]) != "" && active.Any(r => r != target && (col <= 9 ? Rules.NameKey(Txt(r.Values[8])) == Rules.NameKey(Txt(target.Values[8])) && Pretty(9, r.Values[9]) == Pretty(9, target.Values[9]) : XlsxReader.Normal(r.Values[col]) == XlsxReader.Normal(target.Values[col])))) continue;
+                    string decision = updatedFields.Contains(col) ? "Заполненное значение взято из последнего датированного источника." :
+                        col <= 11 && target != null && Txt(target.Values[col <= 9 ? 8 : col]) != "" ? "Значение сводного документа сохранено: из присланных файлов обновляются только отметки и замечания ("+result.Columns.Letter(13)+":"+result.Columns.Letter(20)+")." :
                         col == 8 || col == 9 ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                         col == 10 || col == 11 ? "Первое непустое значение в порядке файлов; требуется сверка реквизитов." :
                         col < 18 ? "Все отметки 1 сохранены; различия показаны в окне конфликтов." : "Все разные исходные тексты объединены без добавления фамилий и дат.";
@@ -444,7 +456,7 @@ namespace ReviewMerge {
             var sources=new List<string>();if(exists)sources.Add(output);
             foreach(string f in files.Select(Path.GetFullPath))if(!sources.Any(s=>string.Equals(s,f,StringComparison.OrdinalIgnoreCase)))sources.Add(f);
             var result=Collect(sources,mainName,asOf,progress,token,options,exists,DateTime.Today);result.Files=files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-            if(options.CurrentDateForNewReviews&&!options.RecalculateHistory)progress(42,"Текущая дата назначена новым проверенным записям: "+result.DatesAssignedToday+". Даты уже внесённых проверок сохранены.");
+            if(options.CurrentDateForNewReviews&&!options.RecalculateHistory)progress(42,"Текущая дата назначена новым проверенным записям: "+result.DatesAssignedToday+".");
             if(result.FilledBoxes.Count>0)progress(43,"Заполнены без замечаний остальные строки: "+result.FilledRows+" в "+result.FilledBoxes.Count+" коробах.");
             if(result.IncompleteBoxes.Count>0)progress(43,"Коробов, проверенных не полностью: "+result.IncompleteBoxes.Count+". Их неотмеченные тома не входят в статистику.");
             string parent=Path.GetDirectoryName(output);Directory.CreateDirectory(parent);

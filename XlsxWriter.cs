@@ -156,7 +156,8 @@ namespace ReviewMerge {
             string[] legacyHeaders={"Ключ короба (формула)","Первая строка короба","Первая проверка короба","Документ проверен","Дата для статистики","Есть замечания","Первая дата из источников"};
             bool ourHelpers=Enumerable.Range(0,7).All(i=>Text(Value(At(main,result.HeaderRow,mainColumns.Count+1+i)))==legacyHeaders[i]);
             if(ourHelpers) RemoveLegacyHelpers(main,mainColumns.Count+1);
-            if(mainColumns.HasVolumeNumber) FormatVolumeColumn(main,first);
+            FormatIdentifierColumn(main,first,12);
+            if(mainColumns.HasVolumeNumber) FormatIdentifierColumn(main,first,13);
             resolvedColumn=ResolvedColumn(main,result.HeaderRow,first);
             var sourceStyles=new Dictionary<int,int>();
             var sample=data.Elements(N+"row").FirstOrDefault(e=>(int)e.Attribute("r")==first);
@@ -198,6 +199,7 @@ namespace ReviewMerge {
                 if(logical!=10&&keep&&previous!=null&&Text(previous[logical-1])==Text(row.Values[logical-1]))continue;
                 int style=old!=null?(int?)old.Attribute("s")??0:sourceStyles.ContainsKey(col)?sourceStyles[col]:bodyStyle;
                 if(old==null){if(logical==10)style=dateStyle;if(logical>=13&&logical<=18)style=intStyle;if(logical>=19)style=noteStyle;}
+                if(logical==12)style=MainTextStyle(style);
                 object value=row.Values[logical-1];if(logical==10){style=MainDateStyle(style);if(old!=null&&old.Element(N+"f")!=null&&previous!=null&&Text(previous[logical-1])==Text(value)){old.SetAttributeValue("s",style);continue;}double? serial=XlsxReader.DateSerial(value);if(serial.HasValue)value=serial.Value;}
                 SetCell(xmlrow,Cell(rn,col,value,style));
             }
@@ -242,17 +244,17 @@ namespace ReviewMerge {
             if(!cols.Elements(N+"col").Any(c=>(int)c.Attribute("min")<=column&&(int)c.Attribute("max")>=column)){cols.Add(Col(column,column,16));var sorted=cols.Elements().OrderBy(c=>(int)c.Attribute("min")).ToList();sorted.Remove();cols.Add(sorted);}
             return column;
         }
-        void FormatVolumeColumn(XDocument main,int first) {
+        void FormatIdentifierColumn(XDocument main,int first,int column) {
             var cols=main.Root.Element(N+"cols");
             if(cols==null){cols=new XElement(N+"cols");main.Root.Element(N+"sheetData").AddBeforeSelf(cols);}
-            var current=cols.Elements(N+"col").FirstOrDefault(c=>(int)c.Attribute("min")<=13&&(int)c.Attribute("max")>=13);
-            var volume=current==null?Col(13,13,14):new XElement(current);
+            var current=cols.Elements(N+"col").FirstOrDefault(c=>(int)c.Attribute("min")<=column&&(int)c.Attribute("max")>=column);
+            var identifier=current==null?Col(column,column,14):new XElement(current);
             if(current!=null){int min=(int)current.Attribute("min"),max=(int)current.Attribute("max");
-                if(min<13){var left=new XElement(current);left.SetAttributeValue("max",12);current.AddBeforeSelf(left);}
-                if(max>13){var right=new XElement(current);right.SetAttributeValue("min",14);current.AddAfterSelf(right);}current.Remove();}
-            volume.SetAttributeValue("min",13);volume.SetAttributeValue("max",13);volume.SetAttributeValue("style",MainTextStyle((int?)volume.Attribute("style")??0));cols.Add(volume);
+                if(min<column){var left=new XElement(current);left.SetAttributeValue("max",column-1);current.AddBeforeSelf(left);}
+                if(max>column){var right=new XElement(current);right.SetAttributeValue("min",column+1);current.AddAfterSelf(right);}current.Remove();}
+            identifier.SetAttributeValue("min",column);identifier.SetAttributeValue("max",column);identifier.SetAttributeValue("style",MainTextStyle((int?)identifier.Attribute("style")??0));cols.Add(identifier);
             var sorted=cols.Elements().OrderBy(c=>(int)c.Attribute("min")).ToList();sorted.Remove();cols.Add(sorted);
-            foreach(var cell in main.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>(int)r.Attribute("r")>=first).Elements(N+"c").Where(c=>Column((string)c.Attribute("r"))==13))
+            foreach(var cell in main.Root.Element(N+"sheetData").Elements(N+"row").Where(r=>(int)r.Attribute("r")>=first).Elements(N+"c").Where(c=>Column((string)c.Attribute("r"))==column))
                 cell.SetAttributeValue("s",MainTextStyle((int?)cell.Attribute("s")??0));
         }
         void Finish(string output,MergeResult result,DateTime asOf,Action<int,string> progress,CancellationToken token) {

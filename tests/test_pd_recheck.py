@@ -267,7 +267,7 @@ def test_box_text_and_criteria():
     s,v,h=helper(path)
     assert [v.cell(r,h).value or '' for r in range(7,12)]==[';ПД|45;',';ПД|45;ПД|46;',';ПД|47;ПД|48;','',';'+';'.join('ПД|%d'%n for n in range(100,146))+';']
     assert [v.cell(r,h+30).value for r in range(7,10)]==['45','45,46','47,48']
-    assert 'CHAR(10)' in s.cell(7,h+30).value and '"б/н",""' in s.cell(10,h).value.replace('\n',' ')
+    assert 'CHAR(10)' in s.cell(7,h+30).value
     criteria=[s.cell(r,c).value for r in range(12,16) for c in range(2,12) if isinstance(s.cell(r,c).value,str)]
     assert criteria and all('"~*"' in f for f in criteria if 'COUNTIF' in f)
     row,col=next((r,c) for r in (12,14) for c in range(2,20) if len(str(v.cell(r,c).value or ''))>255)

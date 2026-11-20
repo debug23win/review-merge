@@ -31,9 +31,9 @@ def make(path, new=False, number=None):
     return path
 
 
-def run(target, *sources, success=True, legacy=False):
+def run(target, *sources, success=True, legacy=False, flags=()):
     completed = subprocess.run([str(ROOT / 'Свод_проверки.exe'), '--batch', str(target),
-                                '2026-10-04', MAIN, *map(str, sources), *(['--keep-legacy-report'] if legacy else [])], timeout=90)
+                                '2026-10-04', MAIN, *map(str, sources), *(['--keep-legacy-report'] if legacy else []), *flags], timeout=90)
     assert (completed.returncode == 0) == success
     if success:
         return json.loads(Path(str(target) + '.run.json').read_text(encoding='utf-8-sig'))
@@ -111,6 +111,41 @@ def test_number_conflict_and_legacy_target():
     assert list(TEMP.glob('legacy-master.xlsx.backup-*'))[0].read_bytes() == before
 
 
+def test_update_existing_review():
+    target = make(TEMP / 'update-existing.xlsx', True)
+    source = make(TEMP / 'correction.xlsx', True)
+    before = ('Анна', datetime(2026, 10, 4), 'ПД', 1, '0007')
+    corrected = ('Борис', datetime(2026, 10, 3), 'ИИ', '1а', '19.2')
+
+    def set_review(path, values, mark=None):
+        w = load_workbook(path)
+        m = w[MAIN]
+        for col, value in enumerate(values, 9):
+            m.cell(7, col).value = value
+        if mark is not None:
+            m['N7'] = mark
+        w.save(path)
+
+    def review():
+        w = load_workbook(target, read_only=True, data_only=True)
+        result = next(w[MAIN].iter_rows(min_row=7, max_row=7, min_col=9, max_col=13, values_only=True))
+        w.close()
+        return result
+
+    set_review(target, before)
+    set_review(source, corrected)
+    run(target, source)
+    assert review() == before
+    run(target, source, flags=('--update-existing-reviews', '--current-date-for-new'))
+    assert review() == corrected
+    set_review(source, (None, None, None, None, None), 1)
+    run(target, source, flags=('--update-existing-reviews',))
+    assert review() == corrected and load_workbook(target)[MAIN]['N7'].value == 1
+    set_review(source, before)
+    run(target, source, flags=('--update-existing-reviews', '--recalculate-history'))
+    assert review() == corrected
+
+
 def test_stage_and_numbers_shared_by_documentation_kinds():
     target = make(TEMP / 'stage-report.xlsx', True)
     book = load_workbook(target)
@@ -183,6 +218,7 @@ if __name__ == '__main__':
     test_mixed_columns_and_text()
     test_number_is_not_a_remark()
     test_number_conflict_and_legacy_target()
+    test_update_existing_review()
     test_stage_and_numbers_shared_by_documentation_kinds()
     test_formatted_summary_is_preserved()
     print('Volume column tests passed: mixed schemas, text identifiers, all six marks, both notes, append, conflicts, repeat merge, formulas and formatted summary')

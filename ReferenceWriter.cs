@@ -8,7 +8,7 @@ using System.Xml.Linq;
 namespace ReviewMerge {
     public sealed partial class XlsxWriter {
         const string CalculationMarker="ReviewMerge.FirstDates.v3";
-        const int AssignedBoxReviewer=51,AssignedBoxDate=52,HelperWidth=53,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
+        const int AssignedBoxReviewer=51,AssignedBoxDate=52,SavedBoxText=53,SavedBoxList=54,HelperWidth=55,MinSlots=7,SpareDays=2,SparePeople=2,SpareBoxes=3;
         sealed class VolumeRecord {public string List="",Who,Raw="",Kind="";public List<string> Boxes=new List<string>();public double? Date;public int Issue,Resolved;public bool IsVolume=true;}
         // One day of the reference sheet: box slots, the "boxes / volumes" total and the note column. A spare day gets a date when a new date appears in the main sheet.
         sealed class DayBlock {public double? Date;public int Start,Slots;public int Total{get{return Start+Slots;}}public int Note{get{return Start+Slots+1;}}}
@@ -152,7 +152,12 @@ namespace ReviewMerge {
                 // «Всего томов по описи» is found by its header: a column deleted or inserted in Excel moves it.
                 int manifest=layout.ManifestColumn;if(ours&&boxHeader!=null){var cell=boxHeader.Elements(N+"c").FirstOrDefault(c=>XlsxReader.Normal(Value(c)).Contains("ПО ОПИСИ"));manifest=cell==null?0:Column((string)cell.Attribute("r"));if(manifest>0)layout.ManifestColumn=manifest;
                     if(manifest==0)result.Problems.Add(new Problem{File="Справка по томам",Row=(int)boxHeader.Attribute("r"),Detail="В учёте проверенных коробов нет столбца «Всего томов по описи»: столбец восстановлен пустым, введите количество томов заново."});}
-                if(ours&&manifest>0)for(int r=start;r<=layout.OldEnd;r++){string key=Text(Value(At(old,r,1)))+"|"+Text(Value(At(old,r,2)));if(!key.StartsWith("|",StringComparison.Ordinal)&&!key.EndsWith("|",StringComparison.Ordinal))layout.Expected[key]=Value(At(old,r,manifest));}
+                if(ours&&manifest>0)for(int r=start;r<=layout.OldEnd;r++) {
+                    object kind=Value(At(old,r,1));
+                    if(Text(kind)=="")continue;
+                    var previousKeys=Rules.BoxKeys(kind,Value(At(old,r,2)));
+                    if(previousKeys.Count==1)layout.Expected[previousKeys[0]]=Value(At(old,r,manifest));
+                }
             }
             this.referenceLayout=layout;
             // Reviewers come from the main sheet; fuller spellings go first, so a new "Петров П.П." joins "Петров Пётр Петрович" of the same files.
@@ -202,7 +207,8 @@ namespace ReviewMerge {
             int col=2;
             foreach(double? day in days.Concat(Enumerable.Repeat((double?)null,SpareDays))){layout.Blocks.Add(new DayBlock{Date=day,Start=col,Slots=slots});col+=slots+2;}
             layout.BlocksEnd=col-1;layout.Shift=layout.OldBlocks.Count>0?layout.BlocksEnd-layout.OldBlocksEnd:0;
-            layout.Boxes.AddRange(layout.BoxFiles.SelectMany(v=>v.Boxes).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(v=>v.Substring(0,v.IndexOf('|')),StringComparer.Ordinal).ThenBy(BoxNumber));
+            layout.Boxes.AddRange(layout.BoxFiles.SelectMany(v=>v.Boxes).Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(v=>v.Substring(0,v.IndexOf('|')),StringComparer.Ordinal).ThenBy(BoxSortKey,StringComparer.Ordinal));
             layout.BoxCount=layout.Boxes.Count;layout.ManifestStart=Math.Max(48,layout.SpareRows.Max()+6);layout.BoxEnd=layout.ManifestStart+layout.Boxes.Count-1;layout.ManifestEnd=layout.BoxEnd+SpareBoxes;
             int existingEnd=old==null?1:old.Root.Element(N+"sheetData").Elements(N+"row").Elements(N+"c").Select(e=>Column((string)e.Attribute("r"))).Where(c=>layout.OldHelper==0||c<layout.OldHelper).DefaultIfEmpty(1).Max();
             if(layout.OldBlocks.Count>0&&existingEnd>layout.OldBlocksEnd)existingEnd+=layout.Shift;
@@ -247,7 +253,11 @@ namespace ReviewMerge {
         static string Exact(string text){return "SUBSTITUTE(SUBSTITUTE(SUBSTITUTE("+text+",\"~\",\"~~\"),\"*\",\"~*\"),\"?\",\"~?\")";}
         // The number of boxes named in the main sheet, kept live by the reference sheet.
         string RegisterBoxes(){return "'Справка по томам'!$"+MergeEngine.ExcelColumn(referenceLayout.Helper+44)+"$3";}
-        static int BoxNumber(string key){int n;int.TryParse(key.Substring(key.IndexOf('|')+1),NumberStyles.Integer,CultureInfo.InvariantCulture,out n);return n;}
+        static string BoxSortKey(string key){return Regex.Replace(key.Substring(key.IndexOf('|')+1),@"[0-9]+",m=>m.Value.PadLeft(Rules.MaxBoxIdLength,'0'));}
+        static object BoxLabel(string key) {
+            string id=key.Substring(key.IndexOf('|')+1);int number;
+            return int.TryParse(id,NumberStyles.None,Inv,out number)?(object)number:id;
+        }
         void WriteReference(Grid calculations,int h,int summaryReportEnd) {
             var l=referenceLayout;var g=new Grid();var old=l.Previous;var notes=new List<Tuple<int,DayBlock,XElement>>();var kept=new List<Tuple<int,int,XElement>>();
             Func<XElement,bool> typed=c=>c.Element(N+"f")==null&&Text(Value(c))!="";
@@ -289,7 +299,7 @@ namespace ReviewMerge {
             for(int i=0;i<=l.ManifestEnd-l.ManifestStart;i++) {
                 int row=l.ManifestStart+i;bool spare=i>=l.Boxes.Count;string key=spare?"":l.Boxes[i],a="$A"+row;
                 // A file belongs to every box of its list: ";ПД|45;ПД|46;" contains ";ПД|45;".
-                string k=a+"&\"|\"&TEXT($B"+row+",\"0\")",inList="ISNUMBER(SEARCH(\";\"&"+k+"&\";\","+fileKeys+"))",volumeCriteria="\"*;\"&"+k+"&\";*\"";
+                string k=a+"&\"|\"&UPPER($B"+row+"&\"\")",inList="ISNUMBER(SEARCH(\";\"&"+k+"&\";\","+fileKeys+"))",volumeCriteria="\"*;\"&"+k+"&\";*\"";
                 Func<string,string> live=f=>spare?"IF("+a+"=\"\",\"\","+f+")":f;
                 object volumes="",checkedVolumes="",date="",state="",owner="";
                 BoxReviewer assigned=null;
@@ -298,7 +308,8 @@ namespace ReviewMerge {
                     string found=MergeEngine.ExcelColumn(h+29)+row;
                     g.Set(row,h+29,"",bodyStyle,"IFERROR(INDEX("+fileKeys+",_xlfn.AGGREGATE(15,6,(ROW("+fileKeys+")-6)/("+LocalRange(h+25,7,fileLast)+"=1),"+(i-l.Boxes.Count+1)+")),\"\")");
                     g.Set(row,1,"",bodyStyle,"IF("+found+"=\"\",\"\",MID("+found+",2,FIND(\"|\","+found+")-2))");
-                    g.Set(row,2,"",intStyle,"IF("+found+"=\"\",\"\",VALUE(MID("+found+",FIND(\"|\","+found+")+1,LEN("+found+")-FIND(\"|\","+found+")-1)))");
+                    string id="MID("+found+",FIND(\"|\","+found+")+1,LEN("+found+")-FIND(\"|\","+found+")-1)",number="VALUE("+id+")";
+                    g.Set(row,2,"",intStyle,"IF("+found+"=\"\",\"\",IFERROR(IF(TEXT("+number+",\"0\")="+id+","+number+","+id+"),"+id+"))");
                     g.Set(row,5,null,StyleAt(old,row,l.ManifestColumn,intStyle));
                 } else {
                     var members=l.Volumes.Where(v=>v.IsVolume&&v.Boxes.Contains(key)).ToList();object expected;l.Expected.TryGetValue(key,out expected);
@@ -307,7 +318,7 @@ namespace ReviewMerge {
                     double? earliest=assigned!=null?assigned.FirstDate:checkedFiles.Count>0?(double?)checkedFiles.Min(v=>v.Date.Value):null;
                     completion[key]=earliest;
                     completedBy[key]=assigned!=null?assigned.Name:earliest.HasValue?checkedFiles.First(v=>v.Date==earliest).Who:"";
-                    g.Set(row,1,key.Split('|')[0],bodyStyle);g.Set(row,2,(double)BoxNumber(key),intStyle);g.Set(row,5,expected,StyleAt(old,row,l.ManifestColumn,intStyle));g.Set(row,h+44,";"+key+";",bodyStyle,"\";\"&"+k+"&\";\"");
+                    g.Set(row,1,key.Split('|')[0],bodyStyle);g.Set(row,2,BoxLabel(key),intStyle);g.Set(row,5,expected,StyleAt(old,row,l.ManifestColumn,intStyle));g.Set(row,h+44,";"+key+";",bodyStyle,"\";\"&"+k+"&\";\"");
                     volumes=members.Count;checkedVolumes=members.Count(v=>v.Date.HasValue);date=earliest.HasValue?(object)earliest.Value:"";state=earliest.HasValue?"Проверен":"Нет даты и фамилии";owner=completedBy[key];
                 }
                 string rawOwner="INDEX("+fileOwners+",MATCH(1,INDEX("+inList+"*("+fileDates+"=F"+row+"),0),0))";
@@ -329,7 +340,7 @@ namespace ReviewMerge {
             }
             // Boxes of the register: a row of the table counts while a file of the main sheet still names its box; a spare row shows a new box.
             string boxKeys=LocalRange(h+44,l.ManifestStart,l.BoxEnd),spareNumbers=LocalRange(2,l.BoxEnd+1,l.ManifestEnd);
-            g.Set(2,h+44,"Коробов в реестре",bodyStyle);g.Set(3,h+44,l.BoxCount,intStyle,(l.Boxes.Count==0?"":"SUMPRODUCT(--(COUNTIF("+fileKeys+",\"*\"&"+Exact(boxKeys)+"&\"*\")>0))+")+"COUNT("+spareNumbers+")");
+            g.Set(2,h+44,"Коробов в реестре",bodyStyle);g.Set(3,h+44,l.BoxCount,intStyle,(l.Boxes.Count==0?"":"SUMPRODUCT(--(COUNTIF("+fileKeys+",\"*\"&"+Exact(boxKeys)+"&\"*\")>0))+")+"SUMPRODUCT(--("+spareNumbers+"<>\"\"))");
             string completed=LocalRange(6,l.ManifestStart,l.ManifestEnd),finishedWho=LocalRange(8,l.ManifestStart,l.ManifestEnd);
             // Reviewers: names of column A stay; spare rows show reviewers that appear in the main sheet after the build.
             foreach(var person in l.People)g.Set(person.Key,1,person.Value,label);

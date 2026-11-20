@@ -35,6 +35,7 @@ class UiTest {
         CheckBoxChoice(errors,false);CheckBoxChoice(errors,true);
         var link=Get<LinkLabel>("forgetNames");link.Text="Забыть сохранённые ответы (12)";link.Visible=true;f.PerformLayout();Pump();
         if(!Get<RadioButton>("rdMode").Checked&&!Inside(Get<CheckBox>("matchSurnames")))errors.Add("match surnames checkbox hidden "+Get<CheckBox>("matchSurnames").Bounds);
+        if(!Get<CheckBox>("updateExisting").Visible||!Inside(Get<CheckBox>("updateExisting")))errors.Add("update existing checkbox is hidden or clipped");
         if(!Inside(link)||link.Width<link.GetPreferredSize(Size.Empty).Width-1)errors.Add("forget link "+link.Bounds);
         int n=0;foreach(var b in Get<List<Button>>("editingButtons")){n++;if(b.Visible&&!Inside(b))errors.Add("button "+n+" clipped "+b.Bounds);}
         // A window as low as the working area of 1920x1080 at 150 %: the list and the log keep about four rows and the page scrolls.

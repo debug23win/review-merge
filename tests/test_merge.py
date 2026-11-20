@@ -249,6 +249,36 @@ def test_box_lists_and_dates_with_year():
     slots=[c.value for row in ref.iter_rows(min_row=12,max_row=12) for c in row if isinstance(c.value,str)]
     assert '45пд, 46пд' in slots,slots
 
+def test_lettered_and_dotted_boxes():
+    temp = run_root / uuid.uuid4().hex
+    temp.mkdir()
+    ids = [1, 'к. №01а', '01.1', '1.10', '1.1а', '1b', '1, 1а и 1.1', '4–5; 10с', 1.2, 'к. №02.0']
+    source = book(temp / 'source.xlsx', [
+        {3: 'Том ' + str(i), 9: 'Анна', 10: datetime(2026, 10, 2), 12: label}
+        for i, label in enumerate(ids)
+    ])
+    target = temp / 'lettered-boxes.xlsx'
+    result = run(target, [source])
+    expected = {1, '1А', '1.1', '1.10', '1.1А', '1B', 4, 5, '10С', '1.2', 2}
+    assert result['Boxes'] == len(expected) and result['Problems'] == 0, result
+    cached = load_workbook(target, data_only=True)
+    ref = cached['Справка по томам']
+    marker = next(c for c in ref[1] if c.value == 'ReviewMerge.FirstDates.v3').column
+    start = ref.cell(1, marker + 3).value
+    actual = {ref.cell(row, 2).value for row in range(start, start + len(expected))}
+    assert actual == expected, actual
+    assert ref.cell(13, marker).value == ';ПД|1;ПД|1А;ПД|1.1;'
+    assert ref.cell(14, marker).value == ';ПД|4;ПД|5;ПД|10С;'
+    w = load_workbook(target)
+    assert w[MAIN]['L10'].value == '1.10' and w[MAIN]['L10'].number_format == '@'
+    ref = w['Справка по томам']
+    row = next(row for row in range(start, start + len(expected)) if ref.cell(row, 2).value == '1А')
+    ref.cell(row, 5, 13)
+    w.save(target)
+    run(target, [source])
+    assert load_workbook(target, data_only=True)['Справка по томам'].cell(row, 5).value == 13
+
+
 def test_surname_matching():
     temp=run_root/uuid.uuid4().hex;temp.mkdir()
     people=['Яковлева Александра Алексеевна','Шекунов Виталий Викторович']
@@ -466,6 +496,7 @@ test_legacy_annotations()
 test_complete_boxes_and_reviewers()
 test_current_date_for_new_reviews()
 test_box_lists_and_dates_with_year()
+test_lettered_and_dotted_boxes()
 test_surname_matching()
 test_incomplete_boxes_and_standalone_iul()
 test_filled_rows_keep_reviewer_and_box()

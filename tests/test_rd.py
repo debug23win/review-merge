@@ -390,6 +390,22 @@ mine = form(B / 'Анна РД.xlsx', [row('К2', '1.1', who='Анна', date=D(
 filled = build(own, mine)
 assert 'error' not in filled and filled['ConflictList'] == [] and load_workbook(own, data_only=True)[MAIN].cell(8, COL['Дата проверки']).value == D(6), filled['ConflictList']
 
+# A supplied correction can update previously filled review fields; the default retains the consolidated values.
+own = form(B / 'Обновление РД.xlsx', [row('К1', '1.1', who='Анна', date=D(7), **{'Факт СМР': 'Да'})])
+correction = form(B / 'Поправка РД.xlsx', [row('К1', '1.1', who='Борис', date=D(6), **{'Факт СМР': 'Нет'})])
+
+def review_fields(path):
+    with open(path, 'rb') as stream:
+        book = load_workbook(stream, read_only=True, data_only=True)
+        fields = tuple(book[MAIN].cell(7, COL[name]).value for name in ('Проверил', 'Дата проверки', 'Факт СМР'))
+        book.close()
+        return fields
+
+build(own, correction)
+assert review_fields(own) == ('Анна', D(7), 'Да')
+build(own, correction, switches=['--update-existing-reviews', '--current-date-for-new'])
+assert review_fields(own) == ('Борис', D(6), 'Нет')
+
 # A damaged base file is named in Russian; the book does not change.
 damaged = B / 'Битая база.xlsx'; damaged.write_bytes(b'not a zip file')
 before = Path(based).read_bytes()

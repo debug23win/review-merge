@@ -430,6 +430,8 @@ namespace ReviewMerge {
         static void MergeSet(RdSet set, RdLayout layout, RdVed ved, MergeOptions options, MergeResult result, DateTime importDate) {
             var reviews = set.Reviews.Where(HasReview).ToList();
             var kept = set.TargetRow != null && HasReview(set.TargetRow) ? set.TargetRow : null;
+            var updates = options.UpdateExistingReviews && !options.RecalculateHistory && set.TargetRow != null
+                ? reviews.Where(r => !string.Equals(r.File, set.TargetRow.File, StringComparison.OrdinalIgnoreCase)) : Enumerable.Empty<RdRow>();
             string document = Txt(set["rd"]) + (Txt(Revision(set["rev"])) != "" && Txt(Revision(set["rev"])) != "0" ? ", изм. " + Txt(set["rev"]) : "");
             if (reviews.Count == 0) { foreach (string k in ReviewKeys(layout)) set[k] = set.TargetRow == null ? null : set.TargetRow[k]; return; }
             var named = reviews.Where(r => Txt(r["who"]) != "").ToList();
@@ -441,6 +443,11 @@ namespace ReviewMerge {
                 if (Txt(kept["date"]) != "") { double? d = XlsxReader.DateSerial(kept["date"]); set["date"] = d.HasValue ? (object)d.Value : kept["date"]; }
                 else { var same = Latest(named.Where(r => r != kept && Rules.NameKey(Txt(r["who"])) == Rules.NameKey(Txt(kept["who"])))); double? d = same == null ? null : XlsxReader.DateSerial(same["date"]); set["date"] = same == null ? null : d.HasValue ? (object)d.Value : same["date"]; }
             }
+            var updatedReview = Latest(updates.Where(r => Txt(r["who"]) != "" || XlsxReader.DateSerial(r["date"]).HasValue));
+            bool updatedWho = updatedReview != null && Txt(updatedReview["who"]) != "";
+            double? updatedDate = updatedReview == null ? null : XlsxReader.DateSerial(updatedReview["date"]);
+            if (updatedWho) set["who"] = Rules.CleanName(updatedReview["who"]);
+            if (updatedDate.HasValue) set["date"] = updatedDate.Value;
             // A check of the Technical expert is dated by the letter of ТЭ («Дата» of the expert in «Ведомость», column K) when its row has no date.
             bool expert = RdBook.IsExpert(set["who"]);
             if (expert && !XlsxReader.DateSerial(set["date"]).HasValue) {
@@ -450,7 +457,8 @@ namespace ReviewMerge {
             }
             if (options.CurrentDateForNewReviews && Txt(set["who"]) != "" && !expert) {
                 double? saved = kept != null && Txt(kept["who"]) != "" ? XlsxReader.DateSerial(kept["date"]) : null;
-                if (saved.HasValue) set["date"] = saved.Value; else { set["date"] = importDate.Date.ToOADate(); result.DatesAssignedToday++; }
+                if (saved.HasValue) { if (!updatedDate.HasValue) set["date"] = saved.Value; }
+                else { set["date"] = importDate.Date.ToOADate(); updatedDate = null; result.DatesAssignedToday++; }
             }
             foreach (string f in layout.Flags) {
                 var flags = reviews.Select(r => Flag(r[f])).ToList();
@@ -462,13 +470,14 @@ namespace ReviewMerge {
                 set[k] = joined;
             }
             // «Факт СМР»: the value of the consolidated book, otherwise of the latest dated check; «Замечания устранены»: the last filled value in file order.
-            var smr = kept != null && Txt(kept["smr"]) != "" ? kept : Latest(reviews.Where(r => Txt(r["smr"]) != ""));
+            var updatedSmr = Latest(updates.Where(r => Txt(r["smr"]) != ""));
+            var smr = updatedSmr ?? (kept != null && Txt(kept["smr"]) != "" ? kept : Latest(reviews.Where(r => Txt(r["smr"]) != "")));
             set["smr"] = smr == null ? null : smr["smr"];
             var fixedRow = reviews.LastOrDefault(r => Txt(r["fixed"]) != "");
             set["fixed"] = fixedRow == null ? null : fixedRow["fixed"];
             // A difference already in the consolidated book is not reported again.
             foreach (string k in new[] { "who", "date", "smr" }.Concat(layout.Flags).Concat(new[] { "text", "note" })) {
-                if (k == "date" && options.CurrentDateForNewReviews) continue;
+                if (k == "date" && options.CurrentDateForNewReviews && !updatedDate.HasValue) continue;
                 var active = reviews.Where(r => Txt(r["who"]) != "" || Txt(r[k]) != "").ToList();
                 var values = active.Select(r => k == "date" ? Pretty(k, r[k]) : XlsxReader.Normal(layout.Flags.Contains(k) ? Flag(r[k]) : r[k])).Distinct().ToList();
                 if (values.Count < 2) continue;
@@ -476,7 +485,9 @@ namespace ReviewMerge {
                 // An empty date of the consolidated book filled from a file of the same reviewer is no conflict when the files agree on it.
                 bool filled = k == "date" && kept != null && Txt(kept["who"]) != "" && Txt(kept["date"]) == "" && Txt(set["date"]) != "";
                 if (filled && active.Where(r => r != kept).All(r => Txt(r["date"]) == "" || Pretty(k, r[k]) == Pretty(k, set["date"]))) continue;
-                string decision = filled ? "Проверяющий сводного документа сохранён; пустая дата заполнена из последней датированной проверки того же проверяющего." :
+                bool updated = k == "who" && updatedWho || k == "date" && updatedDate.HasValue || k == "smr" && updatedSmr != null;
+                string decision = updated ? "Заполненное значение взято из последнего датированного источника." :
+                    filled ? "Проверяющий сводного документа сохранён; пустая дата заполнена из последней датированной проверки того же проверяющего." :
                     (k == "who" || k == "date") && kept != null && Txt(kept["who"]) != "" ? "Проверяющий и дата сводного документа сохранены: из присланных файлов обновляются отметки и замечания." :
                     k == "who" || k == "date" ? "Проверяющий и дата из последней датированной проверки; при равной дате — последний файл в списке." :
                     k == "smr" ? "Значение сводного документа или последней датированной проверки; требуется сверка." :
@@ -620,7 +631,7 @@ namespace ReviewMerge {
             foreach (string f in files.Select(Path.GetFullPath)) if (!sources.Any(s => string.Equals(s, f, StringComparison.OrdinalIgnoreCase))) sources.Add(f);
             var result = new MergeResult { Files = sources.Count - 1 };
             var book = Collect(sources, mainName, asOf, progress, token, options, result, DateTime.Today);
-            if (options.CurrentDateForNewReviews) progress(42, "Текущая дата назначена новым проверкам: " + result.DatesAssignedToday + ". Даты уже внесённых проверок сохранены.");
+            if (options.CurrentDateForNewReviews) progress(42, "Текущая дата назначена новым проверкам: " + result.DatesAssignedToday + ".");
             if (result.ExpertDates > 0) progress(43, "Проверкам ТЭ без даты подставлена дата письма ТЭ из «Ведомости»: " + result.ExpertDates + ".");
             var import = book.Ved.Import;
             if (import != null) progress(44, "«Ведомость» обновлена из базы «" + Path.GetFileName(import.File) + "»: комплектов " + book.Ved.Sets + ", элементов " + book.Ved.Elements + (import.Added + import.Removed > 0 ? "; новых шифров " + import.Added + ", исключено " + import.Removed : "; состав шифров не изменился") + ".");

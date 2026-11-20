@@ -65,41 +65,44 @@ namespace ReviewMerge {
             for(int i=0;i<s.Length;i+=200)parts.Add("\""+s.Substring(i,Math.Min(200,s.Length-i)).Replace("\"","\"\"")+"\"");
             return parts.Count==0?"\"\"":string.Join("&",parts);
         }
-        // ";ПД|45;" from K and L of the main sheet, kept live in Excel: a number, a list "45 и 46", "45, 46", "№45; №46" or a range "45-48".
-        // normal is L without words and signs ("45,46", "45-48"), item is ";ПД|" (";Не указан|" without a kind), numbers is the cell ";1;2;...;1000;":
-        // a range is cut out of it. A cell that mixes a list and a range ("45-47, 50") keeps the boxes read at the build while its text is unchanged.
-        static string BoxListFormula(string box,string normal,string item,string numbers,object value,List<string> keys) {
-            string list="SUBSTITUTE(SUBSTITUTE("+item+"&SUBSTITUTE("+normal+",\",\","+item+")&\";\","+item+"&\";\",\";\"),"+item+"&\"0;\",\";\")";
+        // Keep single box identifiers and simple lists live in Excel. The parsed template also
+        // handles mixed lists and ranges such as "45-47, 1А" while the cell text remains the same.
+        static string BoxListFormula(string box,string normal,string item,string numbers,string savedText,string savedList) {
+            string listPositions="ROW($A$1:INDEX($A:$A,LEN("+normal+")))";
+            string listChars="MID("+normal+","+listPositions+",1)",tokenStart="MID(\",\"&"+normal+","+listPositions+",1)=\",\"";
+            string validList="AND(SUMPRODUCT(--("+tokenStart+"),--ISERROR(FIND("+listChars+",\"123456789\")))=0"+
+                ",SUMPRODUCT(--ISERROR(FIND("+listChars+","+Literal(Rules.BoxCharacters+",")+")))=0"+
+                ",ISERROR(FIND(\"..\","+normal+")),ISERROR(FIND(\".,\","+normal+")),RIGHT("+normal+",1)<>\".\")";
+            string list="IF("+validList+",SUBSTITUTE("+item+"&SUBSTITUTE("+normal+",\",\","+item+")&\";\","+item+"&\";\",\";\"),\"\")";
             string first="LEFT("+normal+",FIND(\"-\","+normal+")-1)",last="MID("+normal+",FIND(\"-\","+normal+")+1,9)";
             string from="FIND(\";\"&"+first+"&\";\","+numbers+")",to="FIND(\";\"&"+last+"&\";\","+numbers+")";
             string range="IFERROR(IF(AND("+to+">="+from+","+last+"-"+first+"<"+Rules.MaxBoxesInCell+"),SUBSTITUTE(MID("+numbers+","+from+","+to+"-"+from+"+LEN("+last+")+1),\";\","+item+")&\";\",\"\"),\"\")";
-            // VALUE uses the Excel locale; integer text such as "02.0" should work with either decimal separator.
-            string numeric="VALUE(SUBSTITUTE("+normal+",\".\",MID(1/2,2,1)))";
-            string single="IFERROR(IF(AND("+numeric+">0,"+numeric+"=INT("+numeric+"),"+numeric+"<1000000),"+item+"&TEXT("+numeric+",\"0\")&\";\",\"\"),\"\")";
+            string length=Rules.MaxBoxIdLength.ToString(Inv);
+            string positions="ROW($A$1:$A$"+length+")";
+            string chars="MID("+normal+","+positions+",1)";
+            string dot="FIND(\".\","+normal+"&\".\")",baseNumber="LEFT("+normal+","+dot+"-1)",tail="MID("+normal+","+dot+"+1,"+length+")";
+            string basePositions="ROW($A$1:$A$6)",baseChars="MID("+baseNumber+","+basePositions+",1)";
+            string integerAlias="AND("+tail+"<>\"\",SUBSTITUTE("+tail+",\"0\",\"\")=\"\",SUMPRODUCT(--("+basePositions+"<=LEN("+baseNumber+")),--ISERROR(FIND("+baseChars+",\"0123456789\")))=0)";
+            string valid="AND(ISNUMBER(FIND(LEFT("+normal+",1),\"123456789\")),LEN("+normal+")<="+length+
+                ",RIGHT("+normal+",1)<>\".\",ISERROR(FIND(\"..\","+normal+")),SUMPRODUCT(--("+positions+"<=LEN("+normal+")),--ISERROR(FIND("+chars+","+Literal(Rules.BoxCharacters)+")))=0"+
+                ",OR(LEN("+normal+")<7,SUMPRODUCT(--ISERROR(FIND(MID("+normal+",ROW($A$1:$A$7),1),\"0123456789\")))>0))";
+            string single="IF("+valid+","+item+"&IF("+integerAlias+","+baseNumber+","+normal+")&\";\",\"\")";
             string live="IF("+normal+"=\"\",\"\",IF(ISERROR(FIND(\"-\","+normal+")),IF(ISERROR(FIND(\",\","+normal+")),"+single+","+list+"),IF(ISERROR(FIND(\",\","+normal+")),"+range+",\"\")))";
-            if(Text(value)==""||Rules.PlainBoxNumber(value))return live;
-            // Text without a box number ("б/н", "н/д") gives no box while it is unchanged, as in Rules.ParseBoxes.
-            string same="IF("+Rules.ExcelText(box)+"="+Literal(ExcelTrim(Convert.ToString(value,Inv)))+",";
-            if(keys.Count==0)return same+"\"\","+live+")";
-            string template=string.Concat(keys.Select(k=>"@"+k.Substring(k.IndexOf('|')+1)))+";";
-            return same+"SUBSTITUTE("+Literal(template)+",\"@\","+item+"),"+live+")";
+            return "IF("+BoxCellText(box)+"="+savedText+",SUBSTITUTE("+savedList+",\"@\","+item+"),"+live+")";
         }
-        static readonly string[][] BoxSigns={new[]{"КОРОБА",""},new[]{"КОРОБ",""},new[]{"КОР.",""},new[]{"К.",""},new[]{"№",""},new[]{" И ",","},new[]{"И",","},new[]{";",","},new[]{"/",","},new[]{"–","-"},new[]{"—","-"},new[]{" ",""},new[]{",,",","}};
-        // The text as Rules.ExcelText gives it: no-break and other pasted spaces, tabs and line breaks become spaces, then TRIM.
-        static string ExcelTrim(string s) {
-            foreach(char c in new[]{'\u00a0','\t','\n','\r','\u202f','\u2007'})s=s.Replace(c,' ');
-            return Regex.Replace(s," +"," ").Trim(' ');
+        static string BoxCellText(string box) {
+            // Excel displays numeric cells using its locale, but commas in text remain list separators.
+            return "IF(ISNUMBER("+box+"),SUBSTITUTE("+box+"&\"\",MID(1/2,2,1),\".\"),"+Rules.ExcelText(box)+")";
         }
-        // L of the main sheet as "45,46" or "45-48": upper case, words "короб", "кор.", "к." and "№" removed, "и", ";", "/" read as commas.
         static string BoxNormalFormula(string box) {
-            string f="UPPER("+Rules.ExcelText(box)+")";foreach(var pair in BoxSigns)f="SUBSTITUTE("+f+",\""+pair[0]+"\",\""+pair[1]+"\")";
-            // Canonical numeric tokens in lists and ranges, too: "к. №02", "02,003", "002-004" use boxes 2,3,4.
-            f="\",\"&"+f;for(int i=0;i<6;i++)f="SUBSTITUTE(SUBSTITUTE("+f+",\",0\",\",\"),\"-0\",\"-\")";
+            string f="\",\"&UPPER("+BoxCellText(box)+")";
+            foreach(var pair in Rules.BoxSigns)f="SUBSTITUTE("+f+","+Literal(pair[0])+","+Literal(pair[1])+")";
+            // Remove leading zeros from the base numbers, including the endpoints of ranges.
+            for(int i=0;i<6;i++)f="SUBSTITUTE(SUBSTITUTE("+f+",\",0\",\",\"),\"-0\",\"-\")";
             return "REPLACE("+f+",1,1,\"\")";
         }
         static string BoxNormal(object value) {
-            string t=(value is double?((double)value).ToString(Inv):ExcelTrim(value==null?"":Convert.ToString(value,Inv))).ToUpperInvariant();foreach(var pair in BoxSigns)t=t.Replace(pair[0],pair[1]);
-            t=","+t;for(int i=0;i<6;i++)t=t.Replace(",0",",").Replace("-0","-");return t.Substring(1);
+            return Regex.Replace(","+Rules.BoxNormal(value),@"(?<=[,-])0{1,6}","").Substring(1);
         }
         // A new <mergeCells> goes after the elements that the worksheet schema puts before it (an autoFilter of the user, for example).
         static XElement MergeCells(XDocument doc) {
@@ -160,6 +163,7 @@ namespace ReviewMerge {
             for(int k=0;k<helperNames.Length;k++)g.Set(6,h+k,helperNames[k],bodyStyle);g.Set(6,h+49,"Отмечено устранение",bodyStyle);g.Set(6,h+50,"Замечания тома устранены",bodyStyle);g.Set(6,h+25,"Новый короб",bodyStyle);g.Set(6,h+30,"Номер короба без слов",bodyStyle);g.Set(6,h+48,"Начало ключа короба",bodyStyle);
             // Box numbers 1-1000 in one cell: a range "45-48" is cut out of it.
             string numbers="$"+MergeEngine.ExcelColumn(h+30)+"$2";g.Set(2,h+30,";"+string.Join(";",Enumerable.Range(1,1000))+";",bodyStyle);
+            g.Set(6,h+SavedBoxText,"Номер короба при сборке",bodyStyle);g.Set(6,h+SavedBoxList,"Короба, прочитанные при сборке",bodyStyle);
             string yr=LocalRange(h+4,7,last),nameTable=NamesRange(h),rawNames=LocalRange(h+9,7,last),boxLists=LocalRange(h,7,last);
             string knownNames=LocalRange(h+45,7,Math.Max(7,referenceLayout.NameTable.Count+6)),knownBoxes=LocalRange(h+44,referenceLayout.ManifestStart,Math.Max(referenceLayout.ManifestStart,referenceLayout.BoxEnd));
             var volumeKeys=result.VolumeKeys;
@@ -168,7 +172,10 @@ namespace ReviewMerge {
                 string kind=MainCell(name,"K",mr),box=MainCell(name,"L",mr),who=MainCell(name,"I",mr),file=MainCell(name,"C",mr),date=MainCell(name,"J",mr);
                 string normal=MergeEngine.ExcelColumn(h+30)+rn,item=MergeEngine.ExcelColumn(h+48)+rn,kindRef=MergeEngine.ExcelColumn(h+8)+rn;
                 g.Set(rn,h+30,BoxNormal(row.Values[11]),bodyStyle,BoxNormalFormula(box));g.Set(rn,h+48,";"+Rules.Kind(row.Values[10])+"|",bodyStyle,"IF(TRIM("+kindRef+")=\"\",\";Не указан|\",\";\"&UPPER(TRIM("+kindRef+"))&\"|\")");
-                g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(box,normal,item,numbers,row.Values[11],keys[i]));
+                g.Set(rn,h+SavedBoxText,Rules.CleanName(row.Values[11]),bodyStyle);
+                string savedList=keys[i].Count==0?"":string.Concat(keys[i].Select(k=>"@"+k.Substring(k.IndexOf('|')+1)))+";";
+                g.Set(rn,h+SavedBoxList,savedList,bodyStyle);
+                g.Set(rn,h,Rules.BoxList(keys[i]),bodyStyle,BoxListFormula(box,normal,item,numbers,MergeEngine.ExcelColumn(h+SavedBoxText)+rn,MergeEngine.ExcelColumn(h+SavedBoxList)+rn));
                 g.Set(rn,h+1,StatKeyOfRaw(row.Values[8]),bodyStyle,"IF("+rawRef+"=\"\",\"\",IFERROR(VLOOKUP("+Exact(rawRef)+","+nameTable+",3,FALSE),"+rawRef+"))");
                 g.Set(rn,h+3,checked_[i],intStyle,"IF(AND("+file+"<>\"\",LEN("+Rules.ExcelText(who)+")>0),1,0)");
                 g.Set(rn,h+4,dates[i].HasValue?(object)dates[i].Value:"",dateStyle,"IF(AND("+x+"=1,ISNUMBER("+date+"),"+date+">=36526,"+date+"<109575),INT("+date+"),\"\")");
